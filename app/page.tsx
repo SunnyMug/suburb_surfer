@@ -174,11 +174,14 @@ export default function Home() {
       <aside className="w-100 shrink-0 h-full flex flex-col bg-sky-50 border-r border-sky-200 shadow-2xl">
         {/* Panel header */}
         <div className="bg-linear-to-br from-sky-200 to-indigo-200 px-6 pt-8 pb-6 shrink-0">
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight leading-tight">
-            Suburb Surfer
+          <h1 className="leading-none">
+            <span className="block text-4xl font-black tracking-tight bg-linear-to-r from-sky-600 to-indigo-600 bg-clip-text text-transparent">
+              Suburb Surfer
+            </span>
           </h1>
-          <p className="text-slate-600 text-sm mt-1.5">
-            Explore Australia's never ending urban sprawl!!
+          <p className="text-slate-500 text-sm mt-2">
+            Discover your next adventure across Australia's never-ending urban
+            sprawl.
           </p>
 
           {/* City selector */}
