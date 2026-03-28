@@ -18,7 +18,13 @@ interface SuburbData {
   heritage_sites: string[];
 }
 
+// Extends SuburbData with a validation-only field stripped before returning to the client.
+interface RawSuburbResponse extends SuburbData {
+  is_suburb: boolean;
+}
+
 const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
+- SUBURB DEFINITION: A suburb is a gazetted residential or mixed-use area with its own official name in the state/territory's address database. Train stations, railway stops, nature reserves, national parks, state forests, hospitals, universities, airports, industrial precincts, and landmarks are NOT suburbs — even if they share a name with a location. If you are not certain a place is a real gazetted suburb, set is_suburb to false.
 - Only state facts you are highly confident are accurate and widely verifiable.
 - For fun_facts and name_etymology: if the true origin or fact is disputed or uncertain, explicitly acknowledge that uncertainty (e.g. "believed to be…" or "likely derived from…").
 - For local_attractions: only include real, well-known places you are confident exist in that suburb.
@@ -31,8 +37,9 @@ const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 
 const JSON_RULES = `Return ONLY a raw JSON object — no markdown, no code blocks, no backticks, no extra text, no commentary. Start your response with { and end with }.
 
-The JSON must have exactly these ten keys:
+The JSON must have exactly these eleven keys:
 - "name": the canonical suburb name as a string
+- "is_suburb": a boolean — true only if this is a genuine gazetted residential or mixed-use suburb; false if it is a train station, nature reserve, park, hospital, university, industrial area, or any other non-suburb location
 - "summary": a two-sentence vibe check written in a fun, punchy tone
 - "fun_facts": an array of exactly two short, verifiable fun fact strings
 - "local_attractions": an array of exactly two real, well-known local attraction strings
@@ -190,7 +197,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const client = createClient(apiKey);
     const text = await generate(client, buildPrompt(city, suburb ?? undefined));
-    const parsed = parseGeminiJson<SuburbData>(text);
+    const { is_suburb, ...parsed } = parseGeminiJson<RawSuburbResponse>(text);
+
+    if (is_suburb === false) {
+      console.warn(`[explore] model returned non-suburb: "${parsed.name}" for city ${city}`);
+      return NextResponse.json(
+        { error: `"${parsed.name}" isn't a real ${city} suburb — it might be a train station, park, or landmark. Hit the button again for another pick.` },
+        { status: 422 }
+      );
+    }
+
     return NextResponse.json(parsed);
   } catch (err) {
     return handleApiError("explore", err);

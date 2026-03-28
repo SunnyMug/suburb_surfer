@@ -169,7 +169,7 @@ export default function Home() {
   const cityMeta = CITIES.find((c) => c.name === selectedCity)!;
 
   return (
-    <main className="flex h-screen overflow-hidden">
+    <main className="flex h-full overflow-hidden">
       {/* Side panel — left side */}
       <aside className="w-100 shrink-0 h-full flex flex-col bg-sky-50 border-r border-sky-200 shadow-2xl">
         {/* Panel header */}
