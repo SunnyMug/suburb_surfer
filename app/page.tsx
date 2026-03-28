@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 
 interface SuburbData {
   name: string;
@@ -57,6 +57,10 @@ export default function Home() {
 
   const [view, setView] = useState<PanelView>("suburb");
 
+  // Prevents rapid re-submission — minimum 3 s between explore requests.
+  const lastFetchRef = useRef<number>(0);
+  const FETCH_COOLDOWN_MS = 3000;
+
   const mapUrl = suburb
     ? getSuburbMapUrl(suburb.name, selectedCity)
     : getDefaultMapUrl(selectedCity);
@@ -75,6 +79,10 @@ export default function Home() {
   }
 
   async function fetchSuburb(suburbName?: string) {
+    const now = Date.now();
+    if (now - lastFetchRef.current < FETCH_COOLDOWN_MS) return;
+    lastFetchRef.current = now;
+
     setLoadingSuburb(true);
     setErrorSuburb(null);
     setView("suburb");

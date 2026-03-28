@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseGeminiJson } from "../_lib/parseJson";
 import { handleApiError } from "../_lib/apiError";
 import { createClient, generate } from "../_lib/groqClient";
+import { validateCity, sanitiseSuburb, sanitiseExclude } from "../_lib/validateParams";
+import { checkRateLimit } from "../_lib/rateLimiter";
 
 interface Restaurant {
   name: string;
@@ -42,17 +44,26 @@ The JSON must have exactly these two keys:
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const suburb = request.nextUrl.searchParams.get("suburb");
-  const city = request.nextUrl.searchParams.get("city") ?? "Sydney";
+  const rateLimitResult = await checkRateLimit(request);
+  if (rateLimitResult.limited) return rateLimitResult.response;
+
+  const rawSuburb = request.nextUrl.searchParams.get("suburb");
+  const rawCity = request.nextUrl.searchParams.get("city");
   const countParam = request.nextUrl.searchParams.get("count");
   const excludeParam = request.nextUrl.searchParams.get("exclude");
 
-  if (!suburb) {
-    return NextResponse.json({ error: "Missing suburb query parameter." }, { status: 400 });
+  const city = validateCity(rawCity);
+  if (!city) {
+    return NextResponse.json({ error: "Invalid city." }, { status: 400 });
   }
 
-  const count = Math.min(Math.max(parseInt(countParam ?? "3", 10), 1), 10);
-  const exclude = excludeParam ? excludeParam.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const suburb = sanitiseSuburb(rawSuburb);
+  if (!suburb) {
+    return NextResponse.json({ error: "Missing or invalid suburb name." }, { status: 400 });
+  }
+
+  const count = Math.min(Math.max(parseInt(countParam ?? "3", 10) || 3, 1), 5);
+  const exclude = sanitiseExclude(excludeParam);
   const apiKey = process.env.GROQ_API_KEY;
 
   if (!apiKey) {

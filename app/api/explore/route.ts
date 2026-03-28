@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseGeminiJson } from "../_lib/parseJson";
 import { handleApiError } from "../_lib/apiError";
 import { createClient, generate } from "../_lib/groqClient";
+import { validateCity, sanitiseSuburb } from "../_lib/validateParams";
+import { checkRateLimit } from "../_lib/rateLimiter";
 
 interface SuburbData {
   name: string;
@@ -164,17 +166,30 @@ ${JSON_RULES}`;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const suburb = request.nextUrl.searchParams.get("suburb") ?? undefined;
-  const city = request.nextUrl.searchParams.get("city") ?? "Sydney";
-  const apiKey = process.env.GROQ_API_KEY;
+  const rateLimitResult = await checkRateLimit(request);
+  if (rateLimitResult.limited) return rateLimitResult.response;
 
+  const rawCity = request.nextUrl.searchParams.get("city");
+  const rawSuburb = request.nextUrl.searchParams.get("suburb");
+
+  const city = validateCity(rawCity);
+  if (!city) {
+    return NextResponse.json({ error: "Invalid city." }, { status: 400 });
+  }
+
+  const suburb = rawSuburb !== null ? sanitiseSuburb(rawSuburb) : undefined;
+  if (rawSuburb !== null && !suburb) {
+    return NextResponse.json({ error: "Invalid suburb name." }, { status: 400 });
+  }
+
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "GROQ_API_KEY is not configured." }, { status: 500 });
   }
 
   try {
     const client = createClient(apiKey);
-    const text = await generate(client, buildPrompt(city, suburb));
+    const text = await generate(client, buildPrompt(city, suburb ?? undefined));
     const parsed = parseGeminiJson<SuburbData>(text);
     return NextResponse.json(parsed);
   } catch (err) {
