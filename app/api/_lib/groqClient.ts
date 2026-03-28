@@ -34,7 +34,11 @@ export async function generate(client: OpenAI, prompt: string): Promise<string> 
       console.log(`[groq] trying model: ${model}`);
 
       const response = await client.chat.completions.create(
-        { model, messages: [{ role: "user", content: prompt }] },
+        {
+          model,
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+        },
         { signal: controller.signal }
       );
 
