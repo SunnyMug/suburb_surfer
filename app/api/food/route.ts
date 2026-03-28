@@ -4,6 +4,7 @@ import { handleApiError } from "../_lib/apiError";
 import { createClient, generate } from "../_lib/groqClient";
 import { validateCity, sanitiseSuburb, sanitiseExclude } from "../_lib/validateParams";
 import { checkRateLimit } from "../_lib/rateLimiter";
+import { fetchSuburbVenues, buildVenueContext } from "../_lib/foursquare";
 
 interface Restaurant {
   name: string;
@@ -22,7 +23,13 @@ const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 - Prefer well-established venues with a strong, long-standing reputation over obscure or newly opened spots you are less certain about.
 - If a suburb has very few dining options, recommend the closest well-known alternatives and note their actual suburb location in the description.`;
 
-function buildPrompt(suburb: string, city: string, count: number, exclude: string[]): string {
+function buildPrompt(
+  suburb: string,
+  city: string,
+  count: number,
+  exclude: string[],
+  venueContext: string
+): string {
   const excludeClause =
     exclude.length > 0
       ? `\n\nDo NOT include any of these already-listed venues: ${exclude.map((n) => `"${n}"`).join(", ")}. Return ${count} different venues.`
@@ -32,7 +39,7 @@ function buildPrompt(suburb: string, city: string, count: number, exclude: strin
 
 Give me ${count} restaurant or café recommendations for the suburb of ${suburb}, ${city}.${excludeClause}
 
-${ANTI_HALLUCINATION}
+${venueContext}${ANTI_HALLUCINATION}
 
 Return ONLY a raw JSON object — no markdown, no code blocks, no backticks, no extra text. Start your response with { and end with }.
 
@@ -72,7 +79,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const client = createClient(apiKey);
-    const text = await generate(client, buildPrompt(suburb, city, count, exclude));
+    const venues = await fetchSuburbVenues(suburb, city);
+    const venueContext = buildVenueContext(venues, suburb, city);
+    const text = await generate(client, buildPrompt(suburb, city, count, exclude, venueContext));
     const parsed = parseGeminiJson<FoodData>(text);
     return NextResponse.json(parsed);
   } catch (err) {

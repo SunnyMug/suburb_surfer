@@ -4,6 +4,8 @@ import { handleApiError } from "../_lib/apiError";
 import { createClient, generate } from "../_lib/groqClient";
 import { validateCity, sanitiseSuburb } from "../_lib/validateParams";
 import { checkRateLimit } from "../_lib/rateLimiter";
+import { fetchSuburbWikiContext } from "../_lib/wikipedia";
+import { fetchSuburbVenues, buildVenueContext } from "../_lib/foursquare";
 
 interface SuburbData {
   name: string;
@@ -141,15 +143,30 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function buildPrompt(city: string, suburb?: string): string {
+function buildPrompt(
+  city: string,
+  suburb?: string,
+  wikiContext?: string | null,
+  venueContext?: string
+): string {
   if (suburb) {
+    const wikiBlock = wikiContext
+      ? `VERIFIED REFERENCE MATERIAL (from Wikipedia — use as your primary source for all factual claims):
+---
+${wikiContext}
+---
+Base your historical facts, etymology, key events, notable people, and heritage sites on the above. You may supplement gaps with your own knowledge, but do not contradict the reference material.
+
+`
+      : "";
+
     return `You are a knowledgeable local guide and historian for ${city}, Australia, with deep familiarity with every suburb in the greater ${city} region.
 
 Describe the ${city} suburb "${suburb}", covering its character, dining scene, and local history.
 
 If the name is slightly misspelt, use the correct canonical spelling in the "name" field. If this is genuinely not a suburb of ${city}, set "name" to the closest real ${city} suburb and note the correction in the summary.
 
-${ANTI_HALLUCINATION}
+${wikiBlock}${venueContext ?? ""}${ANTI_HALLUCINATION}
 
 ${JSON_RULES}`;
   }
@@ -196,7 +213,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const client = createClient(apiKey);
-    const text = await generate(client, buildPrompt(city, suburb ?? undefined));
+
+    // Fetch Wikipedia + Foursquare in parallel for explicit searches.
+    // Skipped for random picks — suburb name isn't known until the LLM responds.
+    const [wikiContext, venues] = suburb
+      ? await Promise.all([
+          fetchSuburbWikiContext(suburb, city),
+          fetchSuburbVenues(suburb, city),
+        ])
+      : [null, []];
+
+    const venueContext = buildVenueContext(venues, suburb ?? "", city);
+    const text = await generate(
+      client,
+      buildPrompt(city, suburb ?? undefined, wikiContext, venueContext)
+    );
     const { is_suburb, ...parsed } = parseGeminiJson<RawSuburbResponse>(text);
 
     if (is_suburb === false) {
