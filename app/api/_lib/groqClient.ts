@@ -2,7 +2,6 @@ import OpenAI from "openai";
 
 /**
  * Model cascade — tried in order on 429 or timeout.
- * Browse available models at: https://console.groq.com/docs/models
  */
 export const MODELS = [
   "llama-3.3-70b-versatile",   // 1,000 RPD — best quality

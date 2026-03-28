@@ -86,13 +86,16 @@ export default function Home() {
     try {
       const res = await fetch(`/api/explore?${params}`);
       const data: SuburbData & { error?: string } = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error ?? `Server error (${res.status})`);
+      if (!res.ok || data.error)
+        throw new Error(data.error ?? `Server error (${res.status})`);
 
       setSuburb(data);
       setSearchInput("");
     } catch (err) {
       setErrorSuburb(
-        err instanceof Error ? err.message : "Something went wrong. Give it another crack!"
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Give it another crack!",
       );
     } finally {
       setLoadingSuburb(false);
@@ -105,7 +108,9 @@ export default function Home() {
     setErrorMoreFood(null);
 
     try {
-      const existingNames = suburb.restaurant_recommendations.map((r) => r.name);
+      const existingNames = suburb.restaurant_recommendations.map(
+        (r) => r.name,
+      );
       const params = new URLSearchParams({
         suburb: suburb.name,
         city: selectedCity,
@@ -114,9 +119,12 @@ export default function Home() {
       });
 
       const res = await fetch(`/api/food?${params}`);
-      const data: { restaurant_recommendations: { name: string; description: string }[]; error?: string } =
-        await res.json();
-      if (!res.ok || data.error) throw new Error(data.error ?? `Server error (${res.status})`);
+      const data: {
+        restaurant_recommendations: { name: string; description: string }[];
+        error?: string;
+      } = await res.json();
+      if (!res.ok || data.error)
+        throw new Error(data.error ?? `Server error (${res.status})`);
 
       setSuburb((prev) =>
         prev
@@ -127,11 +135,13 @@ export default function Home() {
                 ...data.restaurant_recommendations,
               ],
             }
-          : prev
+          : prev,
       );
     } catch (err) {
       setErrorMoreFood(
-        err instanceof Error ? err.message : "Couldn't load more spots. Try again!"
+        err instanceof Error
+          ? err.message
+          : "Couldn't load more spots. Try again!",
       );
     } finally {
       setLoadingMoreFood(false);
@@ -182,7 +192,7 @@ export default function Home() {
           </select>
         </div>
 
-        {/* ── OVERVIEW VIEW ───────────────────────────────── */}
+        {/* OVERVIEW VIEW*/}
         {view === "suburb" && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <button
@@ -202,7 +212,9 @@ export default function Home() {
 
             <div className="flex items-center gap-3">
               <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-xs text-slate-400 font-medium shrink-0">or search</span>
+              <span className="text-xs text-slate-400 font-medium shrink-0">
+                or search
+              </span>
               <div className="flex-1 h-px bg-slate-200" />
             </div>
 
@@ -271,8 +283,13 @@ export default function Home() {
                   </h3>
                   <ul className="space-y-3">
                     {suburb.fun_facts.map((fact, i) => (
-                      <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-snug">
-                        <span className="text-amber-500 shrink-0 mt-0.5">✦</span>
+                      <li
+                        key={i}
+                        className="flex gap-2.5 text-sm text-slate-700 leading-snug"
+                      >
+                        <span className="text-amber-500 shrink-0 mt-0.5">
+                          ✦
+                        </span>
                         {fact}
                       </li>
                     ))}
@@ -285,8 +302,13 @@ export default function Home() {
                   </h3>
                   <ul className="space-y-3">
                     {suburb.local_attractions.map((attraction, i) => (
-                      <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-snug">
-                        <span className="text-teal-500 shrink-0 mt-0.5">📍</span>
+                      <li
+                        key={i}
+                        className="flex gap-2.5 text-sm text-slate-700 leading-snug"
+                      >
+                        <span className="text-teal-500 shrink-0 mt-0.5">
+                          📍
+                        </span>
                         {attraction}
                       </li>
                     ))}
@@ -299,7 +321,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── FOOD VIEW ────────────────────────────────────── */}
+        {/* FOOD VIEW */}
         {view === "food" && suburb && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <div className="text-center">
@@ -334,8 +356,12 @@ export default function Home() {
               <ul className="space-y-4">
                 {suburb.restaurant_recommendations.map((r, i) => (
                   <li key={i} className="space-y-0.5">
-                    <p className="text-sm font-semibold text-slate-800">{r.name}</p>
-                    <p className="text-sm text-slate-600 leading-snug">{r.description}</p>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {r.name}
+                    </p>
+                    <p className="text-sm text-slate-600 leading-snug">
+                      {r.description}
+                    </p>
                   </li>
                 ))}
               </ul>
@@ -364,7 +390,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── HISTORY VIEW ─────────────────────────────────── */}
+        {/* HISTORY VIEW */}
         {view === "history" && suburb && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <div className="text-center">
@@ -388,7 +414,9 @@ export default function Home() {
                       <span className="shrink-0 text-xs font-bold text-stone-500 bg-stone-200 px-2 py-0.5 rounded-md mt-0.5 tabular-nums">
                         {e.year}
                       </span>
-                      <p className="text-sm text-slate-700 leading-snug">{e.event}</p>
+                      <p className="text-sm text-slate-700 leading-snug">
+                        {e.event}
+                      </p>
                     </li>
                   ))}
                 </ul>
@@ -402,8 +430,12 @@ export default function Home() {
                 <ul className="space-y-3">
                   {suburb.notable_people.map((p, i) => (
                     <li key={i} className="space-y-0.5">
-                      <p className="text-sm font-semibold text-slate-800">{p.name}</p>
-                      <p className="text-sm text-slate-600 leading-snug">{p.role}</p>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {p.name}
+                      </p>
+                      <p className="text-sm text-slate-600 leading-snug">
+                        {p.role}
+                      </p>
                     </li>
                   ))}
                 </ul>
@@ -416,7 +448,10 @@ export default function Home() {
                 </h3>
                 <ul className="space-y-2">
                   {suburb.heritage_sites.map((site, i) => (
-                    <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-snug">
+                    <li
+                      key={i}
+                      className="flex gap-2.5 text-sm text-slate-700 leading-snug"
+                    >
                       <span className="text-lime-600 shrink-0 mt-0.5">🏛️</span>
                       {site}
                     </li>
@@ -427,7 +462,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── SECTION TAB STRIP ────────────────────────────── */}
+        {/* SECTION TAB STRIP */}
         {suburb && !loadingSuburb && (
           <div className="shrink-0 px-4 py-3 bg-sky-50 border-t border-sky-200 flex gap-2">
             {TABS.map((tab) => {
