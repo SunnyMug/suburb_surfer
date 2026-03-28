@@ -30,7 +30,7 @@ const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 - Only state facts you are highly confident are accurate and widely verifiable.
 - For fun_facts and name_etymology: if the true origin or fact is disputed or uncertain, explicitly acknowledge that uncertainty (e.g. "believed to be…" or "likely derived from…").
 - For local_attractions: only include real, well-known places you are confident exist in that suburb.
-- For restaurant_recommendations: only recommend real, currently operating establishments you are highly confident about. If uncertain about a venue's current status, add "(verify before visiting)" to its description. Prefer well-established venues with a long-standing reputation.
+- For restaurant_recommendations: if a VERIFIED DINING DIRECTORY is provided above, you MUST only use venues from that list — no additions, no substitutions. If no directory is provided, only recommend establishments you are highly confident are real and currently operating. Never invent venue names.
 - For cuisine_types: only list food styles that are genuinely prominent in that suburb's dining scene.
 - For key_events: only include dates you are highly confident are accurate. If approximate, prefix with "c." (e.g. "c. 1892").
 - For notable_people: only include individuals with a well-documented, specific connection to this suburb — not just the broader city.

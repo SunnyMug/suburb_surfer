@@ -17,11 +17,10 @@ interface FoodData {
 }
 
 const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
-- Only recommend restaurants and cafés you are highly confident are real, currently operating establishments.
-- Do not invent venue names, addresses, or details.
+- If a VERIFIED DINING DIRECTORY is provided above, you MUST only recommend venues from that list. Use their exact names. Do not add any venue not on the list.
+- If no directory is provided, only recommend establishments you are highly confident are real and currently operating. Do not invent venue names.
 - If you are not certain a venue is still open, add "(verify before visiting)" to its description.
-- Prefer well-established venues with a strong, long-standing reputation over obscure or newly opened spots you are less certain about.
-- If a suburb has very few dining options, recommend the closest well-known alternatives and note their actual suburb location in the description.`;
+- If a suburb genuinely has very few dining options, return fewer recommendations rather than inventing or guessing venues.`;
 
 function buildPrompt(
   suburb: string,
