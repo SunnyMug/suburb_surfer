@@ -1,5 +1,12 @@
-const WIKI_API = "https://en.wikipedia.org/w/api.php";
-const TIMEOUT_MS = 4_000;
+/**
+ * Uses the Wikipedia REST summary API rather than the action API.
+ * The REST endpoint handles redirects automatically, returns a clean 404
+ * for missing pages, and surfaces disambiguation pages via `type` — all of
+ * which the action=query&titles= approach handled unreliably.
+ */
+
+const WIKI_REST = "https://en.wikipedia.org/api/rest_v1/page/summary";
+const TIMEOUT_MS = 5_000;
 const MAX_CHARS = 3_000;
 
 const CITY_TO_STATE: Record<string, string> = {
@@ -13,38 +20,33 @@ const CITY_TO_STATE: Record<string, string> = {
   Darwin: "Northern Territory",
 };
 
-interface WikiPage {
-  missing?: boolean;
+interface WikiSummary {
+  type?: string;   // "standard" | "disambiguation" | "no-extract"
   extract?: string;
 }
 
 async function fetchExtract(title: string): Promise<string | null> {
-  const params = new URLSearchParams({
-    action: "query",
-    prop: "extracts",
-    exintro: "true",
-    explaintext: "true",
-    titles: title,
-    format: "json",
-    redirects: "1",
-  });
+  // REST API uses underscores and encodes the comma: "Castle_Hill,_New_South_Wales"
+  const slug = encodeURIComponent(title.replace(/ /g, "_"));
 
   try {
-    const res = await fetch(`${WIKI_API}?${params}`, {
-      headers: { "User-Agent": "SuburbSurfer/1.0" },
+    const res = await fetch(`${WIKI_REST}/${slug}`, {
+      headers: {
+        "User-Agent": "SuburbSurfer/1.0",
+        "Accept": "application/json",
+      },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
 
     if (!res.ok) return null;
 
-    const data = await res.json();
-    const pages: Record<string, WikiPage> = data?.query?.pages;
-    if (!pages) return null;
+    const data: WikiSummary = await res.json();
 
-    const page = Object.values(pages)[0];
-    if (page?.missing || !page?.extract?.trim()) return null;
+    // Disambiguation and no-extract pages have no usable content.
+    if (data.type === "disambiguation" || data.type === "no-extract") return null;
+    if (!data.extract?.trim()) return null;
 
-    return page.extract.slice(0, MAX_CHARS).trim();
+    return data.extract.slice(0, MAX_CHARS).trim();
   } catch {
     return null;
   }
@@ -52,11 +54,10 @@ async function fetchExtract(title: string): Promise<string | null> {
 
 /**
  * Fetches the Wikipedia introductory section for a suburb.
- * Tries "{suburb}, {state}" first (most specific), then falls back to
- * just "{suburb}" if nothing is found.
+ * Tries "{suburb}, {state}" first (most specific), then "{suburb}" alone.
  *
- * Returns null silently on any error or timeout — callers should treat
- * this as optional context and proceed without it if null.
+ * Returns null silently on any error or timeout — callers treat this as
+ * optional context and proceed without it.
  */
 export async function fetchSuburbWikiContext(
   suburb: string,
@@ -68,7 +69,7 @@ export async function fetchSuburbWikiContext(
   for (const title of attempts) {
     const extract = await fetchExtract(title);
     if (extract) {
-      console.log(`[wikipedia] fetched context for "${title}" (${extract.length} chars)`);
+      console.log(`[wikipedia] fetched "${title}" (${extract.length} chars)`);
       return extract;
     }
   }

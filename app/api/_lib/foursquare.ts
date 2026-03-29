@@ -10,6 +10,7 @@
 export interface FsqVenue {
   name: string;
   category: string;
+  cuisine?: string;
 }
 
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
@@ -21,8 +22,10 @@ const OVERPASS_ENDPOINTS = [
 
 const NOMINATIM_TIMEOUT_MS = 5_000;
 const OVERPASS_TIMEOUT_MS  = 12_000;
-const MAX_VENUES = 15;
-const USER_AGENT = "SuburbSurfer/1.0 (educational project)";
+// Fetch a larger pool so we can score and surface the best-documented venues.
+const FETCH_LIMIT = 40;
+const MAX_VENUES  = 15;
+const USER_AGENT  = "SuburbSurfer/1.0 (educational project)";
 
 const CITY_TO_STATE: Record<string, string> = {
   Sydney: "New South Wales",
@@ -111,7 +114,8 @@ export async function fetchSuburbVenues(
 
   const [minLat, maxLat, minLon, maxLon] = bbox;
   const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
-  const query = `[out:json][timeout:12];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out body ${MAX_VENUES};`;
+  // Fetch a larger pool; we score and trim to MAX_VENUES in application code.
+  const query = `[out:json][timeout:12];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out body ${FETCH_LIMIT};`;
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
@@ -135,21 +139,47 @@ export async function fetchSuburbVenues(
       }
 
       const data = JSON.parse(text);
-      const venues: FsqVenue[] = [];
+      const raw: Array<{ venue: FsqVenue; score: number }> = [];
 
       for (const el of data.elements ?? []) {
-        const name = el.tags?.name;
+        const tags: Record<string, string> = el.tags ?? {};
+        const name = tags.name;
         if (!name) continue;
-        const amenity: string = el.tags?.amenity ?? "restaurant";
+
+        const amenity = tags.amenity ?? "restaurant";
         const category =
           amenity === "cafe" ? "Café"
           : amenity === "bar" ? "Bar"
           : amenity === "fast_food" ? "Fast Food"
           : "Restaurant";
-        venues.push({ name, category });
+
+        // Score by data completeness — well-documented venues tend to be
+        // more established. Ways (polygons) are usually larger permanent venues.
+        let score = el.type === "way" ? 2 : 0;
+        if (tags.cuisine)                                    score += 3;
+        if (tags.website || tags["contact:website"])         score += 2;
+        if (tags.phone   || tags["contact:phone"])           score += 1;
+        if (tags.opening_hours)                              score += 1;
+        if (tags["addr:street"] || tags["addr:housenumber"]) score += 1;
+
+        const cuisine = tags.cuisine?.replace(/;.*/, "").trim(); // first value only
+        raw.push({ venue: { name, category, ...(cuisine ? { cuisine } : {}) }, score });
       }
 
-      console.log(`[osm] found ${venues.length} venues for "${suburb}, ${city}"`);
+      // Sort best-documented first, deduplicate by name, take top MAX_VENUES.
+      const seen = new Set<string>();
+      const venues: FsqVenue[] = raw
+        .sort((a, b) => b.score - a.score)
+        .filter(({ venue }) => {
+          const key = venue.name.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, MAX_VENUES)
+        .map(({ venue }) => venue);
+
+      console.log(`[osm] found ${venues.length} venues for "${suburb}, ${city}" (pool: ${raw.length})`);
       return venues;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -172,7 +202,12 @@ export function buildVenueContext(
 ): string {
   if (venues.length === 0) return "";
 
-  const list = venues.map((v) => `• ${v.name} (${v.category})`).join("\n");
+  const list = venues
+    .map((v) => {
+      const detail = v.cuisine ? `${v.category} · ${v.cuisine}` : v.category;
+      return `• ${v.name} (${detail})`;
+    })
+    .join("\n");
 
   return `VERIFIED DINING DIRECTORY — ${venues.length} real food & drink venues confirmed for ${suburb}, ${city}:
 ${list}
