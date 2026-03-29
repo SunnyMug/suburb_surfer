@@ -6,6 +6,7 @@ import { validateCity, sanitiseSuburb } from "../_lib/validateParams";
 import { checkRateLimit } from "../_lib/rateLimiter";
 import { fetchSuburbWikiContext } from "../_lib/wikipedia";
 import { fetchSuburbVenues, buildVenueContext } from "../_lib/foursquare";
+import { pickRandomSuburb } from "../_lib/suburbList";
 
 interface SuburbData {
   name: string;
@@ -58,133 +59,31 @@ The JSON must have exactly these eleven keys:
   - "role": a one-sentence description of their specific connection to this suburb
 - "heritage_sites": an array of exactly two strings, each naming a real heritage-listed or historically significant site in or very near this suburb`;
 
-// Area zones per city used to steer the random pick away from well-known defaults.
-const CITY_ZONES: Record<string, string[]> = {
-  Sydney: [
-    "the inner west (e.g. Leichardt, Ashfield, Dulwich Hill, Marrickville, Stanmore, Petersham, Tempe)",
-    "the lower north shore (e.g. Neutral Bay, Cremorne, Kirribilli, Waverton, Wollstonecraft)",
-    "the upper north shore (e.g. Killara, Lindfield, Turramurra, Wahroonga, Pymble)",
-    "the northern beaches (e.g. Dee Why, Collaroy, Narrabeen, Avalon, Palm Beach, Mona Vale)",
-    "the eastern suburbs (e.g. Randwick, Coogee, Bronte, Maroubra, Kingsford, Kensington)",
-    "the inner east (e.g. Paddington, Surry Hills, Redfern, Waterloo, Alexandria, Zetland)",
-    "the Hills District (e.g. Baulkham Hills, Kellyville, Castle Hill, Rouse Hill, Cherrybrook)",
-    "the south-western suburbs (e.g. Liverpool, Fairfield, Cabramatta, Bankstown, Lakemba)",
-    "the Sutherland Shire (e.g. Cronulla, Miranda, Caringbah, Gymea, Engadine, Menai)",
-    "the St George area (e.g. Kogarah, Hurstville, Rockdale, Blakehurst, Carlton)",
-    "the western suburbs (e.g. Merrylands, Granville, Auburn, Lidcombe, Wentworthville)",
-    "the Blue Mountains foothills (e.g. Penrith, Emu Plains, Glenbrook, Springwood)",
-    "the Hawkesbury and north-west (e.g. Windsor, Richmond, Riverstone, Box Hill, Schofields)",
-    "the Macarthur region (e.g. Campbelltown, Camden, Narellan, Picton, Oran Park)",
-  ],
-  Melbourne: [
-    "the inner north (e.g. Fitzroy, Collingwood, Northcote, Brunswick, Preston)",
-    "the inner south (e.g. South Yarra, Prahran, Windsor, St Kilda, Elwood)",
-    "the inner west (e.g. Footscray, Yarraville, Seddon, Williamstown, Newport)",
-    "the eastern suburbs (e.g. Box Hill, Doncaster, Ringwood, Croydon, Mitcham)",
-    "the south-eastern suburbs (e.g. Dandenong, Springvale, Noble Park, Moorabbin, Cheltenham)",
-    "the Mornington Peninsula fringe (e.g. Frankston, Langwarrin, Seaford, Carrum)",
-    "the Bayside suburbs (e.g. Brighton, Sandringham, Mentone, Beaumaris, Black Rock)",
-    "the northern suburbs (e.g. Coburg, Reservoir, Thomastown, Epping, South Morang)",
-    "the western growth corridor (e.g. Werribee, Hoppers Crossing, Wyndham Vale, Point Cook)",
-    "the Dandenong Ranges fringe (e.g. Belgrave, Ferntree Gully, Boronia, Knox)",
-  ],
-  Brisbane: [
-    "the inner south (e.g. South Brisbane, Woolloongabba, Annerley, Greenslopes)",
-    "the inner north (e.g. Fortitude Valley, Newstead, Teneriffe, New Farm, Windsor)",
-    "the western suburbs (e.g. Toowong, Auchenflower, Indooroopilly, Fig Tree Pocket)",
-    "the south-eastern suburbs (e.g. Mount Gravatt, Carindale, Wishart, Mansfield)",
-    "the northern suburbs (e.g. Chermside, Aspley, Stafford, Everton Park, Kedron)",
-    "the Redlands and bayside (e.g. Cleveland, Capalaba, Victoria Point, Redland Bay)",
-    "the south-western suburbs (e.g. Inala, Richlands, Forest Lake, Darra, Oxley)",
-  ],
-  Perth: [
-    "the inner northern suburbs (e.g. Leederville, Mount Lawley, Inglewood, Maylands)",
-    "the northern coastal suburbs (e.g. Scarborough, Trigg, Carine, Duncraig, Hillarys)",
-    "the southern suburbs (e.g. Fremantle, Hamilton Hill, Spearwood, Bibra Lake, Cockburn)",
-    "the eastern suburbs (e.g. Midland, Guildford, Swan View, Kalamunda, Mundaring)",
-    "the south-eastern suburbs (e.g. Cannington, Gosnells, Maddington, Thornlie)",
-    "the inner south (e.g. Victoria Park, Carlisle, St James, Bentley, Wilson)",
-    "the south-western corridor (e.g. Mandurah fringe: Rockingham, Baldivis, Safety Bay)",
-  ],
-  Adelaide: [
-    "the inner east (e.g. Norwood, Kensington, Magill, Burnside, Beaumont)",
-    "the inner west (e.g. Bowden, Brompton, Hindmarsh, West Croydon, Woodville)",
-    "the inner south (e.g. Unley, Malvern, Goodwood, Clarence Park, Millswood)",
-    "the northern suburbs (e.g. Prospect, Enfield, Blair Athol, Gepps Cross, Elizabeth)",
-    "the southern suburbs (e.g. Marion, Morphett Vale, Noarlunga, Christie Downs)",
-    "the Adelaide Hills fringe (e.g. Stirling, Aldgate, Bridgewater, Crafers, Belair)",
-    "the western coastal suburbs (e.g. Glenelg, Brighton, Hove, Somerton Park, Henley Beach)",
-  ],
-  Canberra: [
-    "Belconnen (e.g. Bruce, Belconnen town centre, Macquarie, Hawker, Evatt)",
-    "Gungahlin (e.g. Gungahlin town centre, Franklin, Harrison, Ngunnawal, Amaroo)",
-    "North Canberra (e.g. Ainslie, Braddon, Downer, Watson, Hackett, Dickson)",
-    "South Canberra (e.g. Griffith, Narrabundah, Forrest, Barton, Kingston, Manuka)",
-    "Tuggeranong (e.g. Greenway, Kambah, Wanniassa, Calwell, Fadden, Weston Creek)",
-    "Woden and Weston Creek (e.g. Phillip, Garran, Hughes, Lyons, Holder, Chapman)",
-  ],
-  Hobart: [
-    "the inner city and waterfront (e.g. Battery Point, Sandy Bay, South Hobart, West Hobart)",
-    "the eastern shore (e.g. Bellerive, Rosny, Clarence, Howrah, Rokeby, Lindisfarne)",
-    "the northern suburbs (e.g. Moonah, Glenorchy, Lutana, Claremont, Berriedale)",
-    "the southern and channel suburbs (e.g. Kingston, Blackmans Bay, Taroona, Margate)",
-  ],
-  Darwin: [
-    "the inner suburbs (e.g. Larrakeyah, Stuart Park, Parap, Fannie Bay, The Gardens)",
-    "the northern suburbs (e.g. Nightcliff, Rapid Creek, Coconut Grove, Alawa, Nakara)",
-    "the southern suburbs (e.g. Winnellie, Berrimah, Yarrawonga, Marrara, Wulagi)",
-    "the Palmerston area (e.g. Palmerston city, Moulden, Woodroffe, Gunn, Rosebery)",
-  ],
-};
 
-const ALPHABET = "ABCDEFGHIJKLMNOPRSTW";
-
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
 
 function buildPrompt(
   city: string,
-  suburb?: string,
-  wikiContext?: string | null,
-  venueContext?: string
+  suburb: string,
+  wikiContext: string | null,
+  venueContext: string
 ): string {
-  if (suburb) {
-    const wikiBlock = wikiContext
-      ? `VERIFIED REFERENCE MATERIAL (from Wikipedia — use as your primary source for all factual claims):
+  const wikiBlock = wikiContext
+    ? `VERIFIED REFERENCE MATERIAL (from Wikipedia — use as your primary source for all factual claims):
 ---
 ${wikiContext}
 ---
 Base your historical facts, etymology, key events, notable people, and heritage sites on the above. You may supplement gaps with your own knowledge, but do not contradict the reference material.
 
 `
-      : "";
+    : "";
 
-    return `You are a knowledgeable local guide and historian for ${city}, Australia, with deep familiarity with every suburb in the greater ${city} region.
+  return `You are a knowledgeable local guide and historian for ${city}, Australia, with deep familiarity with every suburb in the greater ${city} region.
 
 Describe the ${city} suburb "${suburb}", covering its character, dining scene, and local history.
 
 If the name is slightly misspelt, use the correct canonical spelling in the "name" field. If this is genuinely not a suburb of ${city}, set "name" to the closest real ${city} suburb and note the correction in the summary.
 
-${wikiBlock}${venueContext ?? ""}${ANTI_HALLUCINATION}
-
-${JSON_RULES}`;
-  }
-
-  const zones = CITY_ZONES[city] ?? CITY_ZONES["Sydney"];
-  const zone = pickRandom(zones);
-  const letter = pickRandom(ALPHABET.split(""));
-  const seed = Math.floor(Math.random() * 9000) + 1000;
-
-  return `You are a knowledgeable local guide and historian for ${city}, Australia, with deep familiarity with every suburb in the greater ${city} region.
-
-Random seed: ${seed}. Use this to ensure variety across calls.
-
-Your task: pick ONE real, specific suburb from ${city} and describe it. To ensure variety, focus your selection on ${zone}. Prefer suburbs whose name starts with the letter "${letter}" if a good match exists in that area, otherwise pick any suburb from that zone.
-
-Do NOT default to the most famous or commonly mentioned suburbs. Avoid well-known defaults like Newtown, Surry Hills, Parramatta, Petersham, Fitzroy, or St Kilda unless they are genuinely the best fit for the zone and letter hint. Aim for suburbs that are interesting but less frequently spotlighted.
-
-${ANTI_HALLUCINATION}
+${wikiBlock}${venueContext}${ANTI_HALLUCINATION}
 
 ${JSON_RULES}`;
 }
@@ -214,20 +113,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const client = createClient(apiKey);
 
-    // Fetch Wikipedia + Foursquare in parallel for explicit searches.
-    // Skipped for random picks — suburb name isn't known until the LLM responds.
-    const [wikiContext, venues] = suburb
-      ? await Promise.all([
-          fetchSuburbWikiContext(suburb, city),
-          fetchSuburbVenues(suburb, city),
-        ])
-      : [null, []];
+    // For random mode: pick from the verified suburb list — no LLM hallucinations.
+    let resolvedSuburb = suburb;
+    if (!resolvedSuburb) {
+      const picked = pickRandomSuburb(city);
+      if (!picked) {
+        return NextResponse.json(
+          { error: "No suburb list available for this city." },
+          { status: 500 }
+        );
+      }
+      resolvedSuburb = picked;
+      console.log(`[explore] random pick: "${resolvedSuburb}" for ${city}`);
+    }
 
-    const venueContext = buildVenueContext(venues, suburb ?? "", city);
-    const text = await generate(
-      client,
-      buildPrompt(city, suburb ?? undefined, wikiContext, venueContext)
-    );
+    // Fetch Wikipedia + OSM in parallel — now always runs, for both paths.
+    const [wikiContext, venues] = await Promise.all([
+      fetchSuburbWikiContext(resolvedSuburb, city),
+      fetchSuburbVenues(resolvedSuburb, city),
+    ]);
+
+    const venueContext = buildVenueContext(venues, resolvedSuburb, city);
+    const text = await generate(client, buildPrompt(city, resolvedSuburb, wikiContext, venueContext));
     const { is_suburb, ...parsed } = parseGeminiJson<RawSuburbResponse>(text);
 
     if (is_suburb === false) {

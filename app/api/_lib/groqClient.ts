@@ -19,14 +19,19 @@ export function createClient(apiKey: string): OpenAI {
 }
 
 /**
- * Sends a single-turn prompt, falling back through MODELS on 429 or timeout.
+ * Sends a single-turn prompt, falling back through `models` on 429 or timeout.
+ * Defaults to the full MODELS cascade; pass a custom list to pin a specific model.
  * Strips <think>...</think> reasoning blocks that some models emit.
  */
-export async function generate(client: OpenAI, prompt: string): Promise<string> {
+export async function generate(
+  client: OpenAI,
+  prompt: string,
+  models: string[] = MODELS
+): Promise<string> {
   let lastError: unknown;
 
-  for (let i = 0; i < MODELS.length; i++) {
-    const model = MODELS[i];
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -54,7 +59,7 @@ export async function generate(client: OpenAI, prompt: string): Promise<string> 
 
       if (shouldFallback) {
         const reason = isTimeout ? `timed out after ${TIMEOUT_MS / 1000}s` : "returned 429";
-        console.warn(`[groq] ${model} ${reason} — falling back to ${MODELS[i + 1]}`);
+        console.warn(`[groq] ${model} ${reason} — falling back to ${models[i + 1]}`);
         lastError = err;
         continue;
       }
