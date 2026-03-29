@@ -19,8 +19,19 @@ export function validateCity(raw: string | null): string | null {
 }
 
 /**
- * Sanitises a suburb name: trims whitespace, enforces max length,
- * and strips characters that have no place in a suburb name.
+ * Capitalises the first Unicode letter after the start of the string or any
+ * word boundary character (space, hyphen). Handles names like "Brighton-Le-Sands"
+ * and "O'Connor" correctly.
+ */
+function toTitleCase(s: string): string {
+  return s.replace(/(^|[\s\-])(\p{L})/gu, (_, sep, letter) => sep + letter.toUpperCase());
+}
+
+/**
+ * Sanitises a suburb name: trims whitespace, enforces max length, strips
+ * invalid characters, then normalises to title case so "denham court" and
+ * "Denham Court" are treated identically downstream.
+ *
  * Allows Unicode letters (covers accented/non-Latin names), spaces,
  * hyphens, apostrophes, and periods.
  *
@@ -31,7 +42,7 @@ export function sanitiseSuburb(raw: string | null): string | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0 || trimmed.length > 100) return null;
   if (!/^[\p{L}\s\-'.]+$/u.test(trimmed)) return null;
-  return trimmed;
+  return toTitleCase(trimmed);
 }
 
 /**

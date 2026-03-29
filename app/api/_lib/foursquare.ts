@@ -21,7 +21,9 @@ const OVERPASS_ENDPOINTS = [
 ];
 
 const NOMINATIM_TIMEOUT_MS = 5_000;
-const OVERPASS_TIMEOUT_MS  = 12_000;
+// Fail fast on each Overpass endpoint — 3 endpoints × 5s = 15s max wait before
+// surfacing the "venue data unavailable" notice. Previously 12s × 3 = 36s.
+const OVERPASS_TIMEOUT_MS  = 5_000;
 // Fetch a larger pool so we can score and surface the best-documented venues.
 const FETCH_LIMIT = 40;
 const MAX_VENUES  = 15;
@@ -44,13 +46,25 @@ interface NominatimResult {
   display_name: string;
 }
 
-// Geographic area types — anything not in this set is a point of interest
-// (station, building, etc.) whose bounding box is too small to be useful.
-const AREA_TYPES = new Set([
-  "suburb", "neighbourhood", "quarter", "city_district",
-  "village", "town", "municipality", "administrative",
-  "residential", "hamlet",
-]);
+// Preference order for Nominatim result types — higher = better.
+// "administrative" often matches the LGA boundary (huge area) rather than
+// the suburb itself, so it scores lowest among area types.
+const TYPE_PRIORITY: Record<string, number> = {
+  suburb:        10,
+  neighbourhood:  9,
+  residential:    8,
+  hamlet:         7,
+  quarter:        6,
+  city_district:  5,
+  village:        4,
+  town:           3,
+  municipality:   2,
+  administrative: 1,
+};
+
+// If a Nominatim result's bbox exceeds this in either dimension it's almost
+// certainly an LGA/district boundary rather than a suburb (~16 km threshold).
+const MAX_BBOX_DEGREES = 0.15;
 
 async function nominatimSearch(q: string): Promise<NominatimResult | null> {
   const params = new URLSearchParams({
@@ -67,8 +81,14 @@ async function nominatimSearch(q: string): Promise<NominatimResult | null> {
     });
     if (!res.ok) return null;
     const results: NominatimResult[] = await res.json();
-    // Prefer geographic area types; fall back to first result if none match.
-    return results.find((r) => AREA_TYPES.has(r.type)) ?? results[0] ?? null;
+
+    // Only consider geographic area types — aerodromes, POIs, buildings etc.
+    // are excluded. Among qualifying results, return the most specific type.
+    const areaResults = results.filter((r) => r.type in TYPE_PRIORITY);
+    if (areaResults.length === 0) return null;
+    return areaResults.sort(
+      (a, b) => (TYPE_PRIORITY[b.type] ?? 0) - (TYPE_PRIORITY[a.type] ?? 0)
+    )[0];
   } catch {
     return null;
   }
@@ -86,12 +106,24 @@ async function getBoundingBox(
     `${suburb}, Australia`,
   ]) {
     const result = await nominatimSearch(q);
-    if (result) {
-      const [minLat, maxLat, minLon, maxLon] = result.boundingbox.map(Number);
-      console.log(`[osm] geocoded "${q}" (type: ${result.type})`);
-      const pad = 0.005; // ~500m expansion to catch venues just over the boundary
-      return [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad];
+    if (!result) continue;
+
+    const [minLat, maxLat, minLon, maxLon] = result.boundingbox.map(Number);
+    const width  = maxLon - minLon;
+    const height = maxLat - minLat;
+
+    if (width > MAX_BBOX_DEGREES || height > MAX_BBOX_DEGREES) {
+      // Bounding box is too large — almost certainly an LGA or district boundary.
+      // Try the next, more specific query instead.
+      console.warn(
+        `[osm] bbox for "${q}" too large (${width.toFixed(3)}°×${height.toFixed(3)}°, type: ${result.type}) — skipping`
+      );
+      continue;
     }
+
+    const pad = 0.005; // ~500m expansion to catch venues just over the boundary
+    console.log(`[osm] geocoded "${q}" (type: ${result.type})`);
+    return [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad];
   }
 
   return null;
@@ -115,7 +147,7 @@ export async function fetchSuburbVenues(
   const [minLat, maxLat, minLon, maxLon] = bbox;
   const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
   // Fetch a larger pool; we score and trim to MAX_VENUES in application code.
-  const query = `[out:json][timeout:12];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out body ${FETCH_LIMIT};`;
+  const query = `[out:json][timeout:4];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out body ${FETCH_LIMIT};`;
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {

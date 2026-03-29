@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface SuburbData {
   name: string;
@@ -13,6 +13,7 @@ interface SuburbData {
   key_events: { year: string; event: string }[];
   notable_people: { name: string; role: string }[];
   heritage_sites: string[];
+  venuesAvailable: boolean;
 }
 
 type PanelView = "suburb" | "food" | "history";
@@ -36,6 +37,16 @@ const TABS: { id: PanelView; label: string; icon: string }[] = [
   { id: "history", label: "History", icon: "📜" },
 ];
 
+const LOADING_MESSAGES: { after: number; text: string }[] = [
+  { after: 0,     text: "Hitting the pavement…" },
+  { after: 2500,  text: "Checking out the local scene…" },
+  { after: 5000,  text: "Digging through the council records…" },
+  { after: 8000,  text: "Negotiating with the restaurant database…" },
+  { after: 11500, text: "The food directory seems to have gone for lunch." },
+  { after: 17000, text: "Still here. This suburb really values its privacy." },
+  { after: 24000, text: "Contemplating a tree change instead…" },
+];
+
 function getDefaultMapUrl(city: CityName): string {
   return `https://maps.google.com/maps?q=${encodeURIComponent(city)},+Australia&t=&z=12&ie=UTF8&iwloc=&output=embed`;
 }
@@ -56,9 +67,22 @@ export default function Home() {
   const [errorMoreFood, setErrorMoreFood] = useState<string | null>(null);
 
   const [view, setView] = useState<PanelView>("suburb");
+  const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0].text);
 
   // Prevents rapid re-submission — minimum 3 s between explore requests.
   const lastFetchRef = useRef<number>(0);
+
+  // Cycle through loading messages while a fetch is in progress.
+  useEffect(() => {
+    if (!loadingSuburb) {
+      setLoadingMessage(LOADING_MESSAGES[0].text);
+      return;
+    }
+    const timers = LOADING_MESSAGES.slice(1).map(({ after, text }) =>
+      setTimeout(() => setLoadingMessage(text), after)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [loadingSuburb]);
   const FETCH_COOLDOWN_MS = 3000;
 
   const mapUrl = suburb
@@ -203,8 +227,18 @@ export default function Home() {
           </select>
         </div>
 
+        {/* LOADING STATE */}
+        {loadingSuburb && (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 gap-5">
+            <div className="w-11 h-11 rounded-full border-4 border-indigo-200 border-t-indigo-500 animate-spin" />
+            <p className="text-sm text-slate-500 text-center leading-snug max-w-[16rem]">
+              {loadingMessage}
+            </p>
+          </div>
+        )}
+
         {/* OVERVIEW VIEW*/}
-        {view === "suburb" && (
+        {!loadingSuburb && view === "suburb" && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <button
               onClick={() => fetchSuburb()}
@@ -218,7 +252,7 @@ export default function Home() {
                 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
               "
             >
-              {loadingSuburb ? "Just a second..." : "Where should I go?"}
+              Where should I go?
             </button>
 
             <div className="flex items-center gap-3">
@@ -333,7 +367,7 @@ export default function Home() {
         )}
 
         {/* FOOD VIEW */}
-        {view === "food" && suburb && (
+        {!loadingSuburb && view === "food" && suburb && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
@@ -364,45 +398,61 @@ export default function Home() {
               <h3 className="text-xs font-bold uppercase tracking-widest text-orange-700 mb-3">
                 Where to Eat
               </h3>
-              <ul className="space-y-4">
-                {suburb.restaurant_recommendations.map((r, i) => (
-                  <li key={i} className="space-y-0.5">
-                    <p className="text-sm font-semibold text-slate-800">
-                      {r.name}
-                    </p>
-                    <p className="text-sm text-slate-600 leading-snug">
-                      {r.description}
-                    </p>
-                  </li>
-                ))}
-              </ul>
 
-              {errorMoreFood && (
-                <div className="mt-4 p-3 rounded-lg bg-rose-100 border border-rose-200 text-rose-700 text-xs leading-snug">
-                  {errorMoreFood}
+              {suburb.venuesAvailable ? (
+                <>
+                  <ul className="space-y-4">
+                    {suburb.restaurant_recommendations.map((r, i) => (
+                      <li key={i} className="space-y-0.5">
+                        <p className="text-sm font-semibold text-slate-800">
+                          {r.name}
+                        </p>
+                        <p className="text-sm text-slate-600 leading-snug">
+                          {r.description}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {errorMoreFood && (
+                    <div className="mt-4 p-3 rounded-lg bg-rose-100 border border-rose-200 text-rose-700 text-xs leading-snug">
+                      {errorMoreFood}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleLoadMoreFood}
+                    disabled={loadingMoreFood}
+                    className="
+                      mt-5 w-full py-2.5 px-4
+                      rounded-xl font-semibold text-sm text-orange-700
+                      bg-orange-100 hover:bg-orange-200
+                      border border-orange-200
+                      transition-all duration-200 active:scale-95
+                      disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                    "
+                  >
+                    {loadingMoreFood ? "Finding more spots…" : "Load More Recs"}
+                  </button>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-2 py-4 text-center">
+                  <span className="text-2xl">🔌</span>
+                  <p className="text-sm font-semibold text-orange-800">
+                    Venue data unavailable
+                  </p>
+                  <p className="text-xs text-orange-700 leading-snug">
+                    We couldn't reach the OpenStreetMap venue database right now.
+                    Try searching again in a moment.
+                  </p>
                 </div>
               )}
-
-              <button
-                onClick={handleLoadMoreFood}
-                disabled={loadingMoreFood}
-                className="
-                  mt-5 w-full py-2.5 px-4
-                  rounded-xl font-semibold text-sm text-orange-700
-                  bg-orange-100 hover:bg-orange-200
-                  border border-orange-200
-                  transition-all duration-200 active:scale-95
-                  disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-                "
-              >
-                {loadingMoreFood ? "Finding more spots…" : "Load More Recs"}
-              </button>
             </div>
           </div>
         )}
 
         {/* HISTORY VIEW */}
-        {view === "history" && suburb && (
+        {!loadingSuburb && view === "history" && suburb && (
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
