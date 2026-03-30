@@ -88,6 +88,9 @@ function parseArticle(fullText: string): WikiContext {
     nameEtymology:    null,
   };
 
+  // Regex to find === subsections === within a top-level section body.
+  const subSectionRe = /\n===\s*([^=\n]+?)\s*===[ \t]*\n([\s\S]*?)(?=\n==|$)/g;
+
   for (const { heading, body } of segments) {
     const norm = normalise(heading);
     for (const [key, keywords] of Object.entries(SECTION_TARGETS) as [keyof Omit<WikiContext, "intro">, string[]][]) {
@@ -97,6 +100,27 @@ function parseArticle(fullText: string): WikiContext {
         const clean = body.replace(/={2,}[^=\n]+=+/g, "").replace(/\n{3,}/g, "\n\n").trim();
         result[key] = clean.slice(0, SECTION_MAX_CHARS) || null;
         break;
+      }
+    }
+
+    // Some articles bury "Name" or "Etymology" as a === subsection inside
+    // == History == (or similar). If we haven't found nameEtymology yet,
+    // scan this section's body for a matching subsection.
+    if (result.nameEtymology === null) {
+      subSectionRe.lastIndex = 0;
+      let subMatch: RegExpExecArray | null;
+      while ((subMatch = subSectionRe.exec(body)) !== null) {
+        const subNorm = subMatch[1].trim().toLowerCase();
+        if (SECTION_TARGETS.nameEtymology.some((kw) => subNorm.startsWith(kw))) {
+          const subBody = subMatch[2]
+            .replace(/={2,}[^=\n]+=+/g, "")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+          if (subBody) {
+            result.nameEtymology = subBody.slice(0, SECTION_MAX_CHARS);
+          }
+          break;
+        }
       }
     }
   }

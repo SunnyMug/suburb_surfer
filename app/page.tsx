@@ -195,9 +195,9 @@ export default function Home() {
   return (
     <main className="flex h-full overflow-hidden">
       {/* Side panel — left side */}
-      <aside className="w-100 shrink-0 h-full flex flex-col bg-sky-50 border-r border-sky-200 shadow-2xl">
+      <aside className="w-[460px] shrink-0 h-full flex flex-col bg-sky-50 border-r border-sky-200 shadow-2xl">
         {/* Panel header */}
-        <div className="bg-linear-to-br from-sky-200 to-indigo-200 px-6 pt-8 pb-6 shrink-0">
+        <div className="bg-linear-to-br from-sky-200 to-indigo-200 px-5 pt-6 pb-5 shrink-0">
           <h1 className="leading-none">
             <span className="block text-4xl font-black tracking-tight bg-linear-to-r from-sky-600 to-indigo-600 bg-clip-text text-transparent">
               Suburb Surfer
@@ -239,7 +239,7 @@ export default function Home() {
 
         {/* OVERVIEW VIEW*/}
         {!loadingSuburb && view === "suburb" && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
             <button
               onClick={() => fetchSuburb()}
               disabled={loadingSuburb}
@@ -368,7 +368,7 @@ export default function Home() {
 
         {/* FOOD VIEW */}
         {!loadingSuburb && view === "food" && suburb && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
                 Food in {suburb.name}
@@ -378,19 +378,28 @@ export default function Home() {
               </span>
             </div>
 
-            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-rose-700 mb-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-amber-700 mb-3">
                 Local Cuisine
               </h3>
               <div className="flex flex-wrap gap-2">
-                {suburb.cuisine_types.map((cuisine, i) => (
-                  <span
-                    key={i}
-                    className="text-sm font-medium text-rose-700 bg-rose-100 border border-rose-200 px-3 py-1 rounded-full"
-                  >
-                    {cuisine}
-                  </span>
-                ))}
+                {suburb.cuisine_types.map((cuisine, i) => {
+                  const palettes = [
+                    "bg-orange-100 text-orange-800 border-orange-200",
+                    "bg-amber-100 text-amber-800 border-amber-200",
+                    "bg-yellow-100 text-yellow-800 border-yellow-200",
+                    "bg-lime-100 text-lime-800 border-lime-200",
+                    "bg-teal-100 text-teal-800 border-teal-200",
+                  ];
+                  return (
+                    <span
+                      key={i}
+                      className={`text-sm font-semibold border px-3 py-1 rounded-full ${palettes[i % palettes.length]}`}
+                    >
+                      {cuisine}
+                    </span>
+                  );
+                })}
               </div>
             </div>
 
@@ -437,13 +446,13 @@ export default function Home() {
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-2 py-4 text-center">
-                  <span className="text-2xl">🔌</span>
+                  <span className="text-2xl">🍽️</span>
                   <p className="text-sm font-semibold text-orange-800">
                     Venue data unavailable
                   </p>
                   <p className="text-xs text-orange-700 leading-snug">
-                    We couldn't reach the OpenStreetMap venue database right now.
-                    Try searching again in a moment.
+                    We had trouble finding venues for this suburb right now.
+                    Give it another go in a moment.
                   </p>
                 </div>
               )}
@@ -453,7 +462,7 @@ export default function Home() {
 
         {/* HISTORY VIEW */}
         {!loadingSuburb && view === "history" && suburb && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
                 History of {suburb.name}

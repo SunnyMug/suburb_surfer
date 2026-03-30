@@ -29,11 +29,11 @@ interface RawSuburbResponse extends SuburbData {
 const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 - SUBURB DEFINITION: A suburb is a gazetted residential or mixed-use area with its own official name in the state/territory's address database. Train stations, railway stops, nature reserves, national parks, state forests, hospitals, universities, airports, industrial precincts, and landmarks are NOT suburbs — even if they share a name with a location. If you are not certain a place is a real gazetted suburb, set is_suburb to false.
 - Only state facts you are highly confident are accurate and widely verifiable.
-- For name_etymology: derive the explanation STRICTLY from the WIKIPEDIA — NAME/ETYMOLOGY block above if one is provided. If that block is absent or silent on the origin, use your own knowledge but explicitly acknowledge uncertainty (e.g. "believed to be…" or "likely derived from…"). Never invent an etymology.
-- For key_events: use ONLY events found in the WIKIPEDIA — HISTORY block above if one is provided. Dates must match what the source states; use "c." prefix if the source says approximately. Do not add events from your own knowledge unless no history block is provided.
-- For notable_people: use ONLY individuals named in the WIKIPEDIA — NOTABLE RESIDENTS block above if one is provided. Do not add people from your own knowledge unless no residents block is provided.
-- For heritage_sites: use ONLY sites named in the WIKIPEDIA — HERITAGE SITES block above if one is provided. Do not add sites from your own knowledge unless no heritage block is provided.
-- For fun_facts: if the Wikipedia blocks above contain interesting verifiable details not covered by the other fields, prefer those. If uncertain, acknowledge it (e.g. "believed to be…").
+- For name_etymology: derive the explanation STRICTLY from the NAME/ETYMOLOGY SOURCE block if one is provided. If that block is absent or does not mention the name's origin, also check the HISTORY SOURCE block — suburb name origins are frequently described inline within the history section rather than in a dedicated section. If neither source block mentions the origin, use your own knowledge but explicitly acknowledge uncertainty (e.g. "believed to be…" or "likely derived from…"). Never invent an etymology. Do NOT mention or reference any external source by name in your output.
+- For key_events: use ONLY events found in the HISTORY SOURCE block if one is provided. Dates must match what the source states; use "c." prefix if the source says approximately. Do not add events from your own knowledge unless no history block is provided.
+- For notable_people: use ONLY individuals named in the NOTABLE RESIDENTS SOURCE block if one is provided. Do not add people from your own knowledge unless no residents block is provided.
+- For heritage_sites: use ONLY sites named in the HERITAGE SITES SOURCE block if one is provided. Do not add sites from your own knowledge unless no heritage block is provided.
+- For fun_facts: if the source blocks above contain interesting verifiable details not covered by the other fields, prefer those. If uncertain, acknowledge it (e.g. "believed to be…").
 - For local_attractions: only include real, well-known places you are confident exist in that suburb.
 - For restaurant_recommendations: if a VERIFIED DINING DIRECTORY is provided above, you MUST only use venues from that list — no additions, no substitutions. If no directory is provided, only recommend establishments you are highly confident are real and currently operating. Never invent venue names.
 - For cuisine_types: only list food styles that are genuinely prominent in that suburb's dining scene.
@@ -88,33 +88,33 @@ function buildWikiBlocks(ctx: WikiContext | null): string {
   const etymologyText = ctx.nameEtymology ?? ctx.intro;
   if (etymologyText) {
     blocks.push(
-      `WIKIPEDIA — NAME/ETYMOLOGY (use this as the primary source for the name_etymology field):\n---\n${etymologyText}\n---`
+      `NAME/ETYMOLOGY SOURCE (use this as the primary source for the name_etymology field):\n---\n${etymologyText}\n---`
     );
   }
 
   if (ctx.history) {
     blocks.push(
-      `WIKIPEDIA — HISTORY (use this as the primary source for the key_events field):\n---\n${ctx.history}\n---`
+      `HISTORY SOURCE (use this as the primary source for the key_events field):\n---\n${ctx.history}\n---`
     );
   }
 
   if (ctx.heritage) {
     blocks.push(
-      `WIKIPEDIA — HERITAGE SITES (use this as the primary source for the heritage_sites field):\n---\n${ctx.heritage}\n---`
+      `HERITAGE SITES SOURCE (use this as the primary source for the heritage_sites field):\n---\n${ctx.heritage}\n---`
     );
   }
 
   if (ctx.notableResidents) {
     blocks.push(
-      `WIKIPEDIA — NOTABLE RESIDENTS (use this as the primary source for the notable_people field):\n---\n${ctx.notableResidents}\n---`
+      `NOTABLE RESIDENTS SOURCE (use this as the primary source for the notable_people field):\n---\n${ctx.notableResidents}\n---`
     );
   }
 
   if (blocks.length === 0) return "";
 
   return (
-    `The following Wikipedia sections are VERIFIED REFERENCE MATERIAL. Each block ` +
-    `is labelled with the JSON field it primarily grounds. Do NOT contradict these sources.\n\n` +
+    `The following are VERIFIED REFERENCE MATERIAL sections. Each block ` +
+    `is labelled with the JSON field it primarily grounds. Do NOT contradict these sources. Do NOT reference them by name in your output.\n\n` +
     blocks.join("\n\n") +
     "\n\n"
   );
