@@ -44,7 +44,7 @@ const JSON_RULES = `Return ONLY a raw JSON object — no markdown, no code block
 The JSON must have exactly these eleven keys:
 - "name": the canonical suburb name as a string
 - "is_suburb": a boolean — true only if this is a genuine gazetted residential or mixed-use suburb; false if it is a train station, nature reserve, park, hospital, university, industrial area, or any other non-suburb location
-- "summary": a two-sentence vibe check written in a fun, punchy tone
+- "summary": two honest, specific sentences about what this suburb is actually like. Write like a knowledgeable local, not a real estate agent. Be direct — if it's quiet and residential, say so; if it's known for a specific community, cuisine strip, or industry, lead with that. FORBIDDEN words and phrases: "hidden gem", "tucked away", "vibrant", "eclectic", "bustling", "thriving", "nestled", "charming", "lively", "unique blend", "hub of", "little-known", "off the beaten track", "something for everyone"
 - "fun_facts": an array of exactly two short, verifiable fun fact strings
 - "local_attractions": an array of exactly two real, well-known local attraction strings
 - "name_etymology": a two-sentence explanation of the verified origin and meaning of the suburb's name, noting Aboriginal, colonial, or historical context where known

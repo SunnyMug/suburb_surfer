@@ -43,6 +43,9 @@ export async function generate(
           model,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
+          temperature: 0.8,        // slightly below default (1.0) for focused factual output
+          frequency_penalty: 0.6,  // discourages repetitive phrasing within a response
+          presence_penalty: 0.3,   // encourages broader vocabulary choices
         },
         { signal: controller.signal }
       );
