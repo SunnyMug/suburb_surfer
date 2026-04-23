@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 interface SuburbData {
   name: string;
@@ -9,14 +10,23 @@ interface SuburbData {
   local_attractions: string[];
   name_etymology: string;
   cuisine_types: string[];
-  restaurant_recommendations: { name: string; description: string }[];
+  restaurant_recommendations: { name: string; description: string; lat?: number; lng?: number }[];
   key_events: { year: string; event: string }[];
   notable_people: { name: string; role: string }[];
   heritage_sites: string[];
+  demographics?: {
+    data_year: string;
+    data_source: string;
+    population: string;
+    top_ancestries: { name: string; percentage: number }[];
+    top_languages: { name: string; percentage: number }[];
+  } | null;
   venuesAvailable: boolean;
+  image_url?: string;
+  rawVenues?: { name: string; category: string; cuisine?: string; lat: number; lng: number }[];
 }
 
-type PanelView = "suburb" | "food" | "history";
+type PanelView = "suburb" | "food" | "history" | "demographics";
 
 const CITIES = [
   { name: "Sydney", state: "NSW" },
@@ -35,6 +45,7 @@ const TABS: { id: PanelView; label: string; icon: string }[] = [
   { id: "suburb", label: "Overview", icon: "📋" },
   { id: "food", label: "Food", icon: "🍴" },
   { id: "history", label: "History", icon: "📜" },
+  { id: "demographics", label: "Community", icon: "👥" },
 ];
 
 const LOADING_MESSAGES: { after: number; text: string }[] = [
@@ -55,6 +66,58 @@ function getSuburbMapUrl(suburb: string, city: CityName): string {
   return `https://maps.google.com/maps?q=${encodeURIComponent(suburb)},+${encodeURIComponent(city)}&t=&z=14&ie=UTF8&iwloc=&output=embed`;
 }
 
+function getVenueMapUrl(lat: number, lng: number): string {
+  return `https://maps.google.com/maps?q=${lat},${lng}&t=&z=18&ie=UTF8&iwloc=&output=embed`;
+}
+
+const COLORS_ANCESTRY = ['#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#f43f5e', '#84cc16', '#6366f1', '#d946ef', '#cbd5e1'];
+const COLORS_LANGUAGE = ['#3b82f6', '#ef4444', '#8b5cf6', '#f97316', '#14b8a6', '#eab308', '#a855f7', '#0ea5e9', '#ec4899', '#cbd5e1'];
+
+function prepareDemographicsData(data?: { name: string; percentage: number }[]) {
+  if (!data || data.length === 0) return [];
+  const total = data.reduce((acc, curr) => acc + curr.percentage, 0);
+  const chartData = [...data];
+  if (total < 100) {
+    chartData.push({ name: 'Other', percentage: Number((100 - total).toFixed(1)) });
+  }
+  return chartData;
+}
+
+function DemographicsChart({ data, colors }: { data: { name: string; percentage: number }[], colors: string[] }) {
+  if (!data || data.length === 0) return null;
+  const chartData = data.map((d) => ({ name: d.name, value: d.percentage }));
+
+  return (
+    <div className="h-32 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+        <PieChart>
+          <Pie
+            data={chartData}
+            cx="50%"
+            cy="50%"
+            innerRadius={35}
+            outerRadius={65}
+            paddingAngle={2}
+            dataKey="value"
+            stroke="none"
+          >
+            {chartData.map((entry, index) => {
+              const isOther = entry.name === 'Other';
+              const color = isOther ? colors[colors.length - 1] : colors[index % (colors.length - 1)];
+              return <Cell key={`cell-${index}`} fill={color} />;
+            })}
+          </Pie>
+          <Tooltip 
+            formatter={(value: number) => [`${value}%`, undefined]}
+            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+            itemStyle={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export default function Home() {
   const [selectedCity, setSelectedCity] = useState<CityName>("Sydney");
 
@@ -62,9 +125,10 @@ export default function Home() {
   const [loadingSuburb, setLoadingSuburb] = useState(false);
   const [errorSuburb, setErrorSuburb] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedVenue, setSelectedVenue] = useState<{ lat: number; lng: number } | null>(null);
 
-  const [loadingMoreFood, setLoadingMoreFood] = useState(false);
-  const [errorMoreFood, setErrorMoreFood] = useState<string | null>(null);
+  const [visibleFoodCount, setVisibleFoodCount] = useState(3);
 
   const [view, setView] = useState<PanelView>("suburb");
   const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0].text);
@@ -85,12 +149,15 @@ export default function Home() {
   }, [loadingSuburb]);
   const FETCH_COOLDOWN_MS = 3000;
 
-  const mapUrl = suburb
-    ? getSuburbMapUrl(suburb.name, selectedCity)
-    : getDefaultMapUrl(selectedCity);
+  const mapUrl = selectedVenue
+    ? getVenueMapUrl(selectedVenue.lat, selectedVenue.lng)
+    : suburb
+      ? getSuburbMapUrl(suburb.name, selectedCity)
+      : getDefaultMapUrl(selectedCity);
 
   function resetSectionData() {
-    setErrorMoreFood(null);
+    setVisibleFoodCount(3);
+    setSelectedVenue(null);
   }
 
   function handleCityChange(city: CityName) {
@@ -110,6 +177,7 @@ export default function Home() {
     setLoadingSuburb(true);
     setErrorSuburb(null);
     setView("suburb");
+    setIsSearching(true);
     resetSectionData();
 
     const params = new URLSearchParams({ city: selectedCity });
@@ -134,49 +202,13 @@ export default function Home() {
     }
   }
 
-  async function handleLoadMoreFood() {
-    if (!suburb) return;
-    setLoadingMoreFood(true);
-    setErrorMoreFood(null);
+  function handleLoadMoreFood() {
+    setVisibleFoodCount((prev) => prev + 3);
+  }
 
-    try {
-      const existingNames = suburb.restaurant_recommendations.map(
-        (r) => r.name,
-      );
-      const params = new URLSearchParams({
-        suburb: suburb.name,
-        city: selectedCity,
-        count: "3",
-        exclude: existingNames.join(","),
-      });
-
-      const res = await fetch(`/api/food?${params}`);
-      const data: {
-        restaurant_recommendations: { name: string; description: string }[];
-        error?: string;
-      } = await res.json();
-      if (!res.ok || data.error)
-        throw new Error(data.error ?? `Server error (${res.status})`);
-
-      setSuburb((prev) =>
-        prev
-          ? {
-              ...prev,
-              restaurant_recommendations: [
-                ...prev.restaurant_recommendations,
-                ...data.restaurant_recommendations,
-              ],
-            }
-          : prev,
-      );
-    } catch (err) {
-      setErrorMoreFood(
-        err instanceof Error
-          ? err.message
-          : "Couldn't load more spots. Try again!",
-      );
-    } finally {
-      setLoadingMoreFood(false);
+  function handleVenueClick(v: { lat?: number; lng?: number }) {
+    if (v.lat && v.lng) {
+      setSelectedVenue({ lat: v.lat, lng: v.lng });
     }
   }
 
@@ -192,39 +224,125 @@ export default function Home() {
 
   const cityMeta = CITIES.find((c) => c.name === selectedCity)!;
 
-  return (
-    <main className="flex h-full overflow-hidden">
-      {/* Side panel — left side */}
-      <aside className="w-[460px] shrink-0 h-full flex flex-col bg-sky-50 border-r border-sky-200 shadow-2xl">
-        {/* Panel header */}
-        <div className="bg-linear-to-br from-sky-200 to-indigo-200 px-5 pt-6 pb-5 shrink-0">
-          <h1 className="leading-none">
-            <span className="block text-4xl font-black tracking-tight bg-linear-to-r from-sky-600 to-indigo-600 bg-clip-text text-transparent">
-              Suburb Surfer
-            </span>
-          </h1>
-          <p className="text-slate-500 text-sm mt-2">
-            Discover your next adventure across Australia's never-ending urban
-            sprawl.
-          </p>
+  const allVenues = useMemo(() => {
+    if (!suburb) return [];
+    const llmRecs = suburb.restaurant_recommendations;
+    const llmNames = new Set(llmRecs.map(r => r.name.toLowerCase()));
+    
+    const extraRecs = (suburb.rawVenues || [])
+      .filter(v => !llmNames.has(v.name.toLowerCase()))
+      .map(v => {
+        const cat = v.category.toLowerCase();
+        const spot = cat === 'fast food' ? 'fast food spot' : cat;
+        const description = v.cuisine 
+          ? `A local ${spot} specializing in ${v.cuisine.replace(/_/g, ' ')}.`
+          : `A popular local ${spot}.`;
 
-          {/* City selector */}
-          <select
-            value={selectedCity}
-            onChange={(e) => handleCityChange(e.target.value as CityName)}
-            className="
-              mt-4 w-full py-2 px-3 rounded-xl text-sm font-semibold
-              text-slate-700 bg-white/70 border border-white/50
-              focus:outline-none focus:ring-2 focus:ring-indigo-300
-              cursor-pointer
-            "
-          >
-            {CITIES.map((city) => (
-              <option key={city.name} value={city.name}>
-                {city.name}, {city.state}
-              </option>
-            ))}
-          </select>
+        return {
+          name: v.name,
+          description,
+          lat: v.lat,
+          lng: v.lng
+        };
+      });
+      
+    return [...llmRecs, ...extraRecs];
+  }, [suburb]);
+
+  const ancestriesData = useMemo(() => prepareDemographicsData(suburb?.demographics?.top_ancestries), [suburb]);
+  const languagesData = useMemo(() => prepareDemographicsData(suburb?.demographics?.top_languages), [suburb]);
+
+  return (
+    <main className="flex flex-col md:flex-row h-[100dvh] overflow-hidden">
+      {/* Side panel — left side */}
+      <aside className="w-full md:w-[460px] h-[55%] md:h-full shrink-0 flex flex-col bg-sky-50 border-b md:border-b-0 md:border-r border-sky-200 shadow-2xl z-10">
+        {/* Panel header */}
+        <div
+          className={`bg-linear-to-br from-sky-200 to-indigo-200 px-4 md:px-5 ${isSearching ? "py-3 md:py-4" : "pt-5 pb-4 md:pt-6 md:pb-5"} shrink-0 transition-all duration-300`}
+        >
+          {!isSearching && (
+            <>
+              <h1 className="leading-none">
+                <span className="block text-4xl font-black tracking-tight bg-linear-to-r from-sky-600 to-indigo-600 bg-clip-text text-transparent">
+                  Suburb Surfer
+                </span>
+              </h1>
+              <p className="text-slate-500 text-sm mt-2">
+                Discover your next adventure across Australia's never-ending
+                urban sprawl.
+              </p>
+            </>
+          )}
+
+          <div className={`space-y-3 ${!isSearching ? "mt-4" : ""}`}>
+            {/* City selector */}
+            <select
+              value={selectedCity}
+              onChange={(e) => handleCityChange(e.target.value as CityName)}
+              className="
+                w-full py-2 px-3 rounded-xl text-sm font-semibold
+                text-slate-700 bg-white/70 border border-white/50
+                focus:outline-none focus:ring-2 focus:ring-indigo-300
+                cursor-pointer
+              "
+            >
+              {CITIES.map((city) => (
+                <option key={city.name} value={city.name}>
+                  {city.name}, {city.state}
+                </option>
+              ))}
+            </select>
+
+            {isSearching && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => fetchSuburb()}
+                  disabled={loadingSuburb}
+                  className="
+                    px-4 rounded-xl font-semibold text-sm text-white
+                    bg-indigo-500 hover:bg-indigo-600
+                    transition-all duration-200 active:scale-95
+                    disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                    flex items-center justify-center
+                  "
+                  title="Random Suburb"
+                >
+                  🎲
+                </button>
+                <form
+                  onSubmit={handleSearchSubmit}
+                  className="flex-1 flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="Search suburbs…"
+                    disabled={loadingSuburb}
+                    className="
+                      flex-1 py-2 px-4 rounded-xl text-sm text-slate-800
+                      bg-white/80 border border-white/50
+                      placeholder:text-slate-400
+                      focus:outline-none focus:ring-2 focus:ring-indigo-300
+                      disabled:opacity-50
+                    "
+                  />
+                  <button
+                    type="submit"
+                    disabled={loadingSuburb || !searchInput.trim()}
+                    className="
+                      py-2 px-4 rounded-xl font-semibold text-sm text-white
+                      bg-indigo-500 hover:bg-indigo-600
+                      transition-all duration-200 active:scale-95
+                      disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                    "
+                  >
+                    Go
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* LOADING STATE */}
@@ -239,58 +357,62 @@ export default function Home() {
 
         {/* OVERVIEW VIEW*/}
         {!loadingSuburb && view === "suburb" && (
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            <button
-              onClick={() => fetchSuburb()}
-              disabled={loadingSuburb}
-              className="
-                w-full py-3.5 px-6
-                rounded-xl font-semibold text-base text-white
-                bg-indigo-500 hover:bg-indigo-600
-                shadow-md shadow-indigo-200
-                transition-all duration-200 active:scale-95
-                disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-              "
-            >
-              Where should I go?
-            </button>
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
+            {!isSearching && (
+              <>
+                <button
+                  onClick={() => fetchSuburb()}
+                  disabled={loadingSuburb}
+                  className="
+                    w-full py-3.5 px-6
+                    rounded-xl font-semibold text-base text-white
+                    bg-indigo-500 hover:bg-indigo-600
+                    shadow-md shadow-indigo-200
+                    transition-all duration-200 active:scale-95
+                    disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                  "
+                >
+                  Where should I go?
+                </button>
 
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-xs text-slate-400 font-medium shrink-0">
-                or search
-              </span>
-              <div className="flex-1 h-px bg-slate-200" />
-            </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-slate-200" />
+                  <span className="text-xs text-slate-400 font-medium shrink-0">
+                    or search
+                  </span>
+                  <div className="flex-1 h-px bg-slate-200" />
+                </div>
 
-            <form onSubmit={handleSearchSubmit} className="flex gap-2">
-              <input
-                type="text"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="e.g. Newtown, Manly…"
-                disabled={loadingSuburb}
-                className="
-                  flex-1 py-2.5 px-4 rounded-xl text-sm text-slate-800
-                  bg-white border border-slate-200
-                  placeholder:text-slate-400
-                  focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent
-                  disabled:opacity-50
-                "
-              />
-              <button
-                type="submit"
-                disabled={loadingSuburb || !searchInput.trim()}
-                className="
-                  py-2.5 px-4 rounded-xl font-semibold text-sm text-white
-                  bg-indigo-500 hover:bg-indigo-600
-                  transition-all duration-200 active:scale-95
-                  disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-                "
-              >
-                Go
-              </button>
-            </form>
+                <form onSubmit={handleSearchSubmit} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="e.g. Newtown, Manly…"
+                    disabled={loadingSuburb}
+                    className="
+                      flex-1 py-2.5 px-4 rounded-xl text-sm text-slate-800
+                      bg-white border border-slate-200
+                      placeholder:text-slate-400
+                      focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent
+                      disabled:opacity-50
+                    "
+                  />
+                  <button
+                    type="submit"
+                    disabled={loadingSuburb || !searchInput.trim()}
+                    className="
+                      py-2.5 px-4 rounded-xl font-semibold text-sm text-white
+                      bg-indigo-500 hover:bg-indigo-600
+                      transition-all duration-200 active:scale-95
+                      disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                    "
+                  >
+                    Go
+                  </button>
+                </form>
+              </>
+            )}
 
             {errorSuburb && (
               <div className="p-4 rounded-xl bg-rose-100 border border-rose-200 text-rose-700 text-sm leading-snug">
@@ -300,13 +422,22 @@ export default function Home() {
 
             {suburb && !loadingSuburb && (
               <div className="space-y-5">
-                <div className="text-center">
-                  <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">
-                    {suburb.name}
-                  </h2>
-                  <span className="mt-2 inline-block text-xs font-semibold text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full">
-                    {selectedCity}, {cityMeta.state}
-                  </span>
+                <div className="flex flex-col gap-4">
+                  {suburb.image_url && (
+                    <img
+                      src={suburb.image_url}
+                      alt={suburb.name}
+                      className="w-full aspect-video rounded-2xl object-cover shadow-md border-2 border-white"
+                    />
+                  )}
+                  <div className="text-center">
+                    <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">
+                      {suburb.name}
+                    </h2>
+                    <span className="mt-2 inline-block text-xs font-semibold text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full">
+                      {selectedCity}, {cityMeta.state}
+                    </span>
+                  </div>
                 </div>
 
                 <p className="text-slate-600 text-base leading-relaxed">
@@ -368,7 +499,7 @@ export default function Home() {
 
         {/* FOOD VIEW */}
         {!loadingSuburb && view === "food" && suburb && (
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
                 Food in {suburb.name}
@@ -411,10 +542,14 @@ export default function Home() {
               {suburb.venuesAvailable ? (
                 <>
                   <ul className="space-y-4">
-                    {suburb.restaurant_recommendations.map((r, i) => (
-                      <li key={i} className="space-y-0.5">
+                    {allVenues.slice(0, visibleFoodCount).map((r, i) => (
+                      <li 
+                        key={i} 
+                        className={`space-y-0.5 p-2 -mx-2 rounded-lg transition-colors ${r.lat ? 'cursor-pointer hover:bg-orange-100' : ''}`}
+                        onClick={() => handleVenueClick(r)}
+                      >
                         <p className="text-sm font-semibold text-slate-800">
-                          {r.name}
+                          {r.name} {r.lat && <span className="text-xs text-orange-400 ml-1">📍</span>}
                         </p>
                         <p className="text-sm text-slate-600 leading-snug">
                           {r.description}
@@ -423,26 +558,21 @@ export default function Home() {
                     ))}
                   </ul>
 
-                  {errorMoreFood && (
-                    <div className="mt-4 p-3 rounded-lg bg-rose-100 border border-rose-200 text-rose-700 text-xs leading-snug">
-                      {errorMoreFood}
-                    </div>
+                  {visibleFoodCount < allVenues.length && (
+                    <button
+                      onClick={handleLoadMoreFood}
+                      className="
+                        mt-5 w-full py-2.5 px-4
+                        rounded-xl font-semibold text-sm text-orange-700
+                        bg-orange-100 hover:bg-orange-200
+                        border border-orange-200
+                        transition-all duration-200 active:scale-95
+                        cursor-pointer
+                      "
+                    >
+                      Load More Recs
+                    </button>
                   )}
-
-                  <button
-                    onClick={handleLoadMoreFood}
-                    disabled={loadingMoreFood}
-                    className="
-                      mt-5 w-full py-2.5 px-4
-                      rounded-xl font-semibold text-sm text-orange-700
-                      bg-orange-100 hover:bg-orange-200
-                      border border-orange-200
-                      transition-all duration-200 active:scale-95
-                      disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-                    "
-                  >
-                    {loadingMoreFood ? "Finding more spots…" : "Load More Recs"}
-                  </button>
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-2 py-4 text-center">
@@ -462,7 +592,7 @@ export default function Home() {
 
         {/* HISTORY VIEW */}
         {!loadingSuburb && view === "history" && suburb && (
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
             <div className="text-center">
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
                 History of {suburb.name}
@@ -517,18 +647,120 @@ export default function Home() {
                   Heritage Sites
                 </h3>
                 <ul className="space-y-2">
-                  {suburb.heritage_sites.map((site, i) => (
-                    <li
-                      key={i}
-                      className="flex gap-2.5 text-sm text-slate-700 leading-snug"
-                    >
-                      <span className="text-lime-600 shrink-0 mt-0.5">🏛️</span>
-                      {site}
-                    </li>
-                  ))}
+                  {suburb.heritage_sites.map((site, i) => {
+                    const cleanName = site.split(/,\s*\d+| \(/)[0].trim();
+                    return (
+                      <li
+                        key={i}
+                        className="flex gap-2.5 text-sm text-slate-700 leading-snug"
+                      >
+                        <span className="text-lime-600 shrink-0 mt-0.5">🏛️</span>
+                        {cleanName}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* DEMOGRAPHICS VIEW */}
+        {!loadingSuburb && view === "demographics" && suburb && (
+          <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
+            <div className="text-center">
+              <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">
+                Community of {suburb.name}
+              </h2>
+              <span className="mt-1.5 inline-block text-xs font-semibold text-rose-600 bg-rose-100 px-3 py-1 rounded-full">
+                Demographics
+              </span>
+            </div>
+
+            {suburb.demographics ? (
+              <div className="space-y-5">
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-center">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-rose-700 mb-1">
+                    Population
+                  </h3>
+                  <p className="text-3xl font-black text-rose-600">
+                    {suburb.demographics.population}
+                  </p>
+                </div>
+
+                <div className="bg-fuchsia-50 border border-fuchsia-200 rounded-xl p-4">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-fuchsia-700 mb-3">
+                    Top Ancestries
+                  </h3>
+                  <div className="flex items-center gap-3">
+                    <div className="w-[45%] shrink-0">
+                      <DemographicsChart data={ancestriesData} colors={COLORS_ANCESTRY} />
+                    </div>
+                    <ul className="flex-1 space-y-2.5">
+                      {ancestriesData.map((a, i) => {
+                        const isOther = a.name === 'Other';
+                        const color = isOther ? COLORS_ANCESTRY[COLORS_ANCESTRY.length - 1] : COLORS_ANCESTRY[i % (COLORS_ANCESTRY.length - 1)];
+                        return (
+                          <li key={i} className={`flex justify-between items-start text-sm ${isOther ? 'opacity-80' : ''}`}>
+                            <div className="flex items-start gap-2 pt-0.5">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1" style={{ backgroundColor: color }} />
+                              <span className={`font-semibold text-slate-800 leading-tight ${isOther ? 'italic text-slate-600' : ''}`}>{a.name}</span>
+                            </div>
+                            <span className={`font-bold px-1.5 py-0.5 rounded-md ml-2 shrink-0 ${isOther ? 'text-slate-600 bg-slate-200/50' : 'text-fuchsia-700 bg-fuchsia-200/50'}`}>
+                              {a.percentage}%
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-blue-700 mb-3">
+                    Top Languages
+                  </h3>
+                  <div className="flex items-center gap-3">
+                    <div className="w-[45%] shrink-0">
+                      <DemographicsChart data={languagesData} colors={COLORS_LANGUAGE} />
+                    </div>
+                    <ul className="flex-1 space-y-2.5">
+                      {languagesData.map((l, i) => {
+                        const isOther = l.name === 'Other';
+                        const color = isOther ? COLORS_LANGUAGE[COLORS_LANGUAGE.length - 1] : COLORS_LANGUAGE[i % (COLORS_LANGUAGE.length - 1)];
+                        return (
+                          <li key={i} className={`flex justify-between items-start text-sm ${isOther ? 'opacity-80' : ''}`}>
+                            <div className="flex items-start gap-2 pt-0.5">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1" style={{ backgroundColor: color }} />
+                              <span className={`font-semibold text-slate-800 leading-tight ${isOther ? 'italic text-slate-600' : ''}`}>{l.name}</span>
+                            </div>
+                            <span className={`font-bold px-1.5 py-0.5 rounded-md ml-2 shrink-0 ${isOther ? 'text-slate-600 bg-slate-200/50' : 'text-blue-700 bg-blue-200/50'}`}>
+                              {l.percentage}%
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="pt-2 text-center">
+                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">
+                    Source: {suburb.demographics.data_source || "Census Data"} ({suburb.demographics.data_year || "2021"})
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                <span className="text-2xl">🤷‍♂️</span>
+                <p className="text-sm font-semibold text-rose-800">
+                  No demographic data found
+                </p>
+                <p className="text-xs text-rose-700 leading-snug">
+                  We couldn't find detailed census data for this suburb.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -537,12 +769,14 @@ export default function Home() {
           <div className="shrink-0 px-4 py-3 bg-sky-50 border-t border-sky-200 flex gap-2">
             {TABS.map((tab) => {
               const isActive = view === tab.id;
-              const activeClass =
+                const activeClass =
                 tab.id === "suburb"
                   ? "bg-indigo-100 text-indigo-700"
                   : tab.id === "food"
                     ? "bg-orange-100 text-orange-700"
-                    : "bg-stone-200 text-stone-700";
+                    : tab.id === "history"
+                      ? "bg-stone-200 text-stone-700"
+                      : "bg-rose-100 text-rose-700";
 
               return (
                 <button
@@ -567,7 +801,7 @@ export default function Home() {
       {/* Full-screen interactive map */}
       <iframe
         src={mapUrl}
-        className="flex-1 h-full border-0"
+        className="flex-1 w-full h-full border-0"
         allowFullScreen
         loading="lazy"
         referrerPolicy="no-referrer-when-downgrade"

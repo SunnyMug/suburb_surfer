@@ -15,10 +15,19 @@ interface SuburbData {
   local_attractions: string[];
   name_etymology: string;
   cuisine_types: string[];
-  restaurant_recommendations: { name: string; description: string }[];
+  restaurant_recommendations: { name: string; description: string; lat?: number; lng?: number }[];
   key_events: { year: string; event: string }[];
   notable_people: { name: string; role: string }[];
   heritage_sites: string[];
+  demographics?: {
+    data_year: string;
+    data_source: string;
+    population: string;
+    top_ancestries: { name: string; percentage: number }[];
+    top_languages: { name: string; percentage: number }[];
+  } | null;
+  image_url?: string;
+  rawVenues?: any[];
 }
 
 // Extends SuburbData with a validation-only field stripped before returning to the client.
@@ -33,7 +42,7 @@ const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 - For key_events: use ONLY events found in the HISTORY SOURCE block if one is provided. Dates must match what the source states; use "c." prefix if the source says approximately. Do not add events from your own knowledge unless no history block is provided.
 - For notable_people: use ONLY individuals named in the NOTABLE RESIDENTS SOURCE block if one is provided. Do not add people from your own knowledge unless no residents block is provided.
 - For heritage_sites: use ONLY sites named in the HERITAGE SITES SOURCE block if one is provided. Do not add sites from your own knowledge unless no heritage block is provided.
-- For fun_facts: if the source blocks above contain interesting verifiable details not covered by the other fields, prefer those. If uncertain, acknowledge it (e.g. "believed to be…").
+- For fun_facts: if the source blocks above contain interesting verifiable details not covered by the other fields, prefer those. If uncertain, acknowledge it (e.g. "believed to be…"). CRITICAL: Fun facts MUST NOT overlap with name_etymology. Do not include trivia about the suburb's name or its origin here; keep name origins exclusively in name_etymology.
 - For local_attractions: only include real, well-known places you are confident exist in that suburb.
 - For restaurant_recommendations: if a VERIFIED DINING DIRECTORY is provided above, you MUST only use venues from that list — no additions, no substitutions. If no directory is provided, only recommend establishments you are highly confident are real and currently operating. Never invent venue names.
 - For cuisine_types: only list food styles that are genuinely prominent in that suburb's dining scene.
@@ -41,11 +50,11 @@ const ANTI_HALLUCINATION = `Critical accuracy rules you must follow:
 
 const JSON_RULES = `Return ONLY a raw JSON object — no markdown, no code blocks, no backticks, no extra text, no commentary. Start your response with { and end with }.
 
-The JSON must have exactly these eleven keys:
+The JSON must have exactly these twelve keys:
 - "name": the canonical suburb name as a string
 - "is_suburb": a boolean — true only if this is a genuine gazetted residential or mixed-use suburb; false if it is a train station, nature reserve, park, hospital, university, industrial area, or any other non-suburb location
 - "summary": two honest, specific sentences about what this suburb is actually like. Write like a knowledgeable local, not a real estate agent. Be direct — if it's quiet and residential, say so; if it's known for a specific community, cuisine strip, or industry, lead with that. FORBIDDEN words and phrases: "hidden gem", "tucked away", "vibrant", "eclectic", "bustling", "thriving", "nestled", "charming", "lively", "unique blend", "hub of", "little-known", "off the beaten track", "something for everyone"
-- "fun_facts": an array of exactly two short, verifiable fun fact strings
+- "fun_facts": an array of exactly two short, verifiable fun fact strings. These MUST NOT contain any information about the etymology, naming, or meaning of the suburb's name.
 - "local_attractions": an array of exactly two real, well-known local attraction strings
 - "name_etymology": a two-sentence explanation of the verified origin and meaning of the suburb's name, noting Aboriginal, colonial, or historical context where known
 - "cuisine_types": an array of exactly three cuisine types or food styles that are genuinely prominent in this suburb
@@ -58,7 +67,13 @@ The JSON must have exactly these eleven keys:
 - "notable_people": an array of exactly two objects, each with:
   - "name": the person's full name as a string
   - "role": a one-sentence description of their specific connection to this suburb
-- "heritage_sites": an array of exactly two strings, each naming a real heritage-listed or historically significant site in or very near this suburb`;
+- "heritage_sites": an array of exactly two strings, each naming a real heritage-listed or historically significant site in or very near this suburb
+- "demographics": an object containing the following keys (or null if the DEMOGRAPHICS SOURCE is missing or contains no data):
+  - "data_year": the year the data was collected as a string (e.g. "2021", or "Unknown")
+  - "data_source": the source of the data as a string (e.g. "Australian Bureau of Statistics", or "Census Data" if not explicitly named)
+  - "population": the total population as a string (e.g. "5,234")
+  - "top_ancestries": an array of up to ten objects, each with "name" (e.g. "English") and "percentage" as a strictly numeric value (e.g. 25.2). Return empty array if not mentioned. Extract as many as are explicitly listed with percentages, up to a maximum of 10.
+  - "top_languages": an array of up to ten objects, each with "name" (e.g. "Mandarin") and "percentage" as a strictly numeric value (e.g. 15.0). Return empty array if not mentioned. Extract as many as are explicitly listed with percentages, up to a maximum of 10.`;
 
 
 
@@ -107,6 +122,12 @@ function buildWikiBlocks(ctx: WikiContext | null): string {
   if (ctx.notableResidents) {
     blocks.push(
       `NOTABLE RESIDENTS SOURCE (use this as the primary source for the notable_people field):\n---\n${ctx.notableResidents}\n---`
+    );
+  }
+
+  if (ctx.demographics) {
+    blocks.push(
+      `DEMOGRAPHICS SOURCE (use this as the primary source for the demographics field. Do not make up statistics!):\n---\n${ctx.demographics}\n---`
     );
   }
 
@@ -210,7 +231,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       parsed.restaurant_recommendations = [];
     }
 
-    return NextResponse.json({ ...parsed, venuesAvailable });
+    if (wikiContext?.imageUrl) {
+      parsed.image_url = wikiContext.imageUrl;
+    }
+
+    // Enrich LLM recommendations with exact coordinates from OSM data
+    if (venuesAvailable) {
+      const venueMap = new Map(venues.map(v => [v.name.toLowerCase(), v]));
+      parsed.restaurant_recommendations = parsed.restaurant_recommendations.map(rec => {
+        const match = venueMap.get(rec.name.toLowerCase());
+        return match ? { ...rec, lat: match.lat, lng: match.lng } : rec;
+      });
+    }
+
+    return NextResponse.json({ ...parsed, venuesAvailable, rawVenues: venues });
   } catch (err) {
     return handleApiError("explore", err);
   }

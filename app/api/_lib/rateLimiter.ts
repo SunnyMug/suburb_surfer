@@ -47,28 +47,32 @@ export async function checkRateLimit(
     request.headers.get("x-real-ip") ??
     "anonymous";
 
-  const { success, limit, remaining, reset } = await rl.limit(ip);
+  try {
+    const { success, limit, remaining, reset } = await rl.limit(ip);
 
-  if (!success) {
-    const retryAfter = Math.ceil((reset - Date.now()) / 1000);
-    console.warn(
-      `[rate-limit] IP ${ip} exceeded limit (${limit} req/min). Retry after ${retryAfter}s.`
-    );
+    if (!success) {
+      const retryAfter = Math.ceil((reset - Date.now()) / 1000);
+      console.warn(
+        `[rate-limit] IP ${ip} exceeded limit (${limit} req/min). Retry after ${retryAfter}s.`
+      );
 
-    return {
-      limited: true,
-      response: NextResponse.json(
-        { error: "We're getting too many requests right now. Please try again in a moment." },
-        {
-          status: 429,
-          headers: {
-            "X-RateLimit-Limit": String(limit),
-            "X-RateLimit-Remaining": String(remaining),
-            "Retry-After": String(retryAfter),
-          },
-        }
-      ),
-    };
+      return {
+        limited: true,
+        response: NextResponse.json(
+          { error: "We're getting too many requests right now. Please try again in a moment." },
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Limit": String(limit),
+              "X-RateLimit-Remaining": String(remaining),
+              "Retry-After": String(retryAfter),
+            },
+          }
+        ),
+      };
+    }
+  } catch (err) {
+    console.warn(`[rate-limit] Upstash Redis unreachable, bypassing rate limit:`, err instanceof Error ? err.message : String(err));
   }
 
   return { limited: false };

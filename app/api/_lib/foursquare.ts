@@ -11,6 +11,8 @@ export interface FsqVenue {
   name: string;
   category: string;
   cuisine?: string;
+  lat: number;
+  lng: number;
 }
 
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
@@ -25,8 +27,8 @@ const NOMINATIM_TIMEOUT_MS = 5_000;
 // surfacing the "venue data unavailable" notice. Previously 12s × 3 = 36s.
 const OVERPASS_TIMEOUT_MS  = 5_000;
 // Fetch a larger pool so we can score and surface the best-documented venues.
-const FETCH_LIMIT = 40;
-const MAX_VENUES  = 15;
+const FETCH_LIMIT = 50;
+const MAX_VENUES  = 30;
 const USER_AGENT  = "SuburbSurfer/1.0 (educational project)";
 
 const CITY_TO_STATE: Record<string, string> = {
@@ -44,6 +46,8 @@ interface NominatimResult {
   boundingbox: [string, string, string, string]; // [minLat, maxLat, minLon, maxLon]
   type: string;
   display_name: string;
+  osm_type: string;
+  osm_id: number;
 }
 
 // Preference order for Nominatim result types — higher = better.
@@ -94,10 +98,16 @@ async function nominatimSearch(q: string): Promise<NominatimResult | null> {
   }
 }
 
-async function getBoundingBox(
+interface GeoData {
+  bbox: [number, number, number, number];
+  osmType: string;
+  osmId: number;
+}
+
+async function getGeoData(
   suburb: string,
   city: string
-): Promise<[number, number, number, number] | null> {
+): Promise<GeoData | null> {
   const state = CITY_TO_STATE[city] ?? city;
 
   for (const q of [
@@ -122,8 +132,12 @@ async function getBoundingBox(
     }
 
     const pad = 0.005; // ~500m expansion to catch venues just over the boundary
-    console.log(`[osm] geocoded "${q}" (type: ${result.type})`);
-    return [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad];
+    console.log(`[osm] geocoded "${q}" (type: ${result.type}, osm_type: ${result.osm_type}, osm_id: ${result.osm_id})`);
+    return {
+      bbox: [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad],
+      osmType: result.osm_type,
+      osmId: result.osm_id
+    };
   }
 
   return null;
@@ -138,22 +152,40 @@ export async function fetchSuburbVenues(
   suburb: string,
   city: string
 ): Promise<FsqVenue[]> {
-  const bbox = await getBoundingBox(suburb, city);
-  if (!bbox) {
+  const geo = await getGeoData(suburb, city);
+  if (!geo) {
     console.warn(`[osm] could not geocode "${suburb}, ${city}"`);
     return [];
   }
 
-  const [minLat, maxLat, minLon, maxLon] = bbox;
-  const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
-  // Fetch a larger pool; we score and trim to MAX_VENUES in application code.
-  const query = `[out:json][timeout:4];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out body ${FETCH_LIMIT};`;
+  const { bbox, osmType, osmId } = geo;
+  
+  let areaId: number | null = null;
+  if (osmType === "relation") {
+    areaId = 3600000000 + Number(osmId);
+  } else if (osmType === "way") {
+    areaId = 2400000000 + Number(osmId);
+  }
+
+  let query: string;
+  if (areaId !== null) {
+    // Query using the strict polygon boundary (area) of the suburb
+    query = `[out:json][timeout:4];area(${areaId})->.searchArea;(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](area.searchArea);way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](area.searchArea););out center ${FETCH_LIMIT};`;
+  } else {
+    // Fallback to bounding box if it's a node
+    const [minLat, maxLat, minLon, maxLon] = bbox;
+    const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
+    query = `[out:json][timeout:4];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out center ${FETCH_LIMIT};`;
+  }
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { 
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": USER_AGENT
+        },
         body: `data=${encodeURIComponent(query)}`,
         signal: AbortSignal.timeout(OVERPASS_TIMEOUT_MS),
       });
@@ -195,7 +227,16 @@ export async function fetchSuburbVenues(
         if (tags["addr:street"] || tags["addr:housenumber"]) score += 1;
 
         const cuisine = tags.cuisine?.replace(/;.*/, "").trim(); // first value only
-        raw.push({ venue: { name, category, ...(cuisine ? { cuisine } : {}) }, score });
+        
+        const lat = el.lat ?? el.center?.lat;
+        const lng = el.lon ?? el.center?.lon;
+        
+        if (lat !== undefined && lng !== undefined) {
+          raw.push({ 
+            venue: { name, category, lat, lng, ...(cuisine ? { cuisine } : {}) }, 
+            score 
+          });
+        }
       }
 
       // Sort best-documented first, deduplicate by name, take top MAX_VENUES.

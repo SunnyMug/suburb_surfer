@@ -34,14 +34,17 @@ export interface WikiContext {
   heritage:         string | null; // == Heritage listings ==
   notableResidents: string | null; // == Notable residents == / == Notable people ==
   nameEtymology:    string | null; // == Name == / == Etymology == (not always present)
+  demographics:     string | null; // == Demographics == / == Population ==
+  imageUrl:         string | null;
 }
 
 // Headings we actively look for (matched case-insensitively on the normalised heading).
-const SECTION_TARGETS: Record<keyof Omit<WikiContext, "intro">, string[]> = {
+const SECTION_TARGETS: Record<keyof Omit<WikiContext, "intro" | "imageUrl">, string[]> = {
   history:          ["history"],
   heritage:         ["heritage"],
   notableResidents: ["notable residents", "notable people", "notable alumni"],
   nameEtymology:    ["name", "etymology", "origin"],
+  demographics:     ["demographics", "population", "people"],
 };
 
 /**
@@ -86,6 +89,8 @@ function parseArticle(fullText: string): WikiContext {
     heritage:         null,
     notableResidents: null,
     nameEtymology:    null,
+    demographics:     null,
+    imageUrl:         null,
   };
 
   // Regex to find === subsections === within a top-level section body.
@@ -131,7 +136,8 @@ function parseArticle(fullText: string): WikiContext {
 async function fetchFullArticle(title: string): Promise<WikiContext | null> {
   const params = new URLSearchParams({
     action:      "query",
-    prop:        "extracts",
+    prop:        "extracts|pageimages",
+    piprop:      "original",
     explaintext: "true",
     titles:      title,
     format:      "json",
@@ -151,13 +157,14 @@ async function fetchFullArticle(title: string): Promise<WikiContext | null> {
       data?.query?.pages;
     if (!pages) return null;
 
-    const page = Object.values(pages)[0];
+    const page: any = Object.values(pages)[0];
     // Wikipedia represents missing pages with a "missing" key (value is "").
     if ("missing" in page || !page.extract?.trim()) return null;
 
-    // Enforce a hard ceiling on total text before parsing.
-    const capped = page.extract.slice(0, TOTAL_MAX_CHARS * 2);
-    return parseArticle(capped);
+    // Pass the full article to parseArticle. Individual sections are capped during parsing.
+    const ctx = parseArticle(page.extract);
+    ctx.imageUrl = page.original?.source || null;
+    return ctx;
   } catch {
     return null;
   }

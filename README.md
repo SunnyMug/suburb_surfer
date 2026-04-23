@@ -9,6 +9,7 @@ Live at [suburb-surfer.vercel.app](https://suburb-surfer.vercel.app)
 ## Tech Stack
 
 - Next.js 15 (App Router), TypeScript, Tailwind CSS
+- Recharts for interactive demographic visualizations
 - Groq Cloud — LLaMA 3.3 70B with LLaMA 3.1 8B as fallback
 - Wikipedia MediaWiki Action API
 - OpenStreetMap (Nominatim + Overpass)
@@ -21,7 +22,7 @@ Live at [suburb-surfer.vercel.app](https://suburb-surfer.vercel.app)
 
 When you search for or randomly pick a suburb, the app fetches two things in parallel before calling the LLM:
 
-- **Wikipedia** — the History, Heritage listings, Notable residents, and Name/Etymology sections from the suburb's Wikipedia article
+- **Wikipedia** — the History, Demographics, Heritage listings, Notable residents, and Name/Etymology sections from the suburb's Wikipedia article
 - **OpenStreetMap** — real venue names from Nominatim geocoding + Overpass, scored by data completeness to surface more established places first
 
 Each Wikipedia section is passed to the LLM as a labelled reference block tied to a specific output field — history events come from the History section, heritage sites from Heritage listings, and so on. Restaurant recommendations are restricted to venues confirmed in the OSM data. The LLM can only fall back to its own knowledge when a section is missing, and is instructed to flag uncertainty when it does.
