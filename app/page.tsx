@@ -89,7 +89,7 @@ function DemographicsChart({ data, colors }: { data: { name: string; percentage:
 
   return (
     <div className="h-32 w-full">
-      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+      <ResponsiveContainer width="99%" height="100%" minWidth={0} minHeight={0}>
         <PieChart>
           <Pie
             data={chartData}
@@ -108,7 +108,7 @@ function DemographicsChart({ data, colors }: { data: { name: string; percentage:
             })}
           </Pie>
           <Tooltip 
-            formatter={(value: number) => [`${value}%`, undefined]}
+            formatter={(value: any) => [`${value}%`, undefined]}
             contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
             itemStyle={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}
           />
