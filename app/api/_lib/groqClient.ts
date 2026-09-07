@@ -4,8 +4,8 @@ import OpenAI from "openai";
  * Model cascade — tried in order on 429 or timeout.
  */
 export const MODELS = [
-  "llama-3.3-70b-versatile",   // 1,000 RPD — best quality
-  "llama-3.1-8b-instant",      // 14,400 RPD — very fast fallback
+  "openai/gpt-oss-120b",   // 1,000 RPD — best quality
+  "qwen/qwen3.8-27b",      // 14,400 RPD — very fast fallback
 ];
 
 /** Max ms to wait per model before aborting and trying the next. */
@@ -58,7 +58,7 @@ export async function generate(
 
       const isTimeout = err instanceof Error && err.name === "AbortError";
       const is429 = err instanceof OpenAI.APIError && err.status === 429;
-      const shouldFallback = (is429 || isTimeout) && i < MODELS.length - 1;
+      const shouldFallback = (is429 || isTimeout) && i < models.length - 1;
 
       if (shouldFallback) {
         const reason = isTimeout ? `timed out after ${TIMEOUT_MS / 1000}s` : "returned 429";

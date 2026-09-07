@@ -172,26 +172,34 @@ async function fetchFullArticle(title: string): Promise<WikiContext | null> {
 
 /**
  * Fetches structured Wikipedia context for a suburb.
- * Tries "{suburb}, {state}" first, then "{suburb}" alone.
+ * Fetches "{suburb}, {state}" and "{suburb}" in parallel, prioritizing the
+ * state-disambiguated article if both or either exists.
  * Returns null silently on any error — callers treat this as optional.
  */
 export async function fetchSuburbWikiContext(
   suburb: string,
   city:   string
 ): Promise<WikiContext | null> {
-  const state    = CITY_TO_STATE[city];
-  const attempts = state ? [`${suburb}, ${state}`, suburb] : [suburb];
+  const state = CITY_TO_STATE[city];
+  if (!state) {
+    return fetchFullArticle(suburb);
+  }
 
-  for (const title of attempts) {
-    const ctx = await fetchFullArticle(title);
-    if (ctx) {
-      const sections = Object.entries(ctx)
-        .filter(([, v]) => v !== null)
-        .map(([k]) => k)
-        .join(", ");
-      console.log(`[wikipedia] fetched "${title}" — sections: ${sections}`);
-      return ctx;
-    }
+  // Fetch both in parallel for minimum latency
+  const [specificCtx, generalCtx] = await Promise.all([
+    fetchFullArticle(`${suburb}, ${state}`),
+    fetchFullArticle(suburb),
+  ]);
+
+  const ctx = specificCtx || generalCtx;
+  if (ctx) {
+    const title = specificCtx ? `${suburb}, ${state}` : suburb;
+    const sections = Object.entries(ctx)
+      .filter(([, v]) => v !== null)
+      .map(([k]) => k)
+      .join(", ");
+    console.log(`[wikipedia] fetched "${title}" — sections: ${sections}`);
+    return ctx;
   }
 
   console.warn(`[wikipedia] no article found for "${suburb}" in ${city}`);

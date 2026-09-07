@@ -7,6 +7,7 @@ import { checkRateLimit } from "../_lib/rateLimiter";
 import { fetchSuburbWikiContext, WikiContext } from "../_lib/wikipedia";
 import { fetchSuburbVenues, buildVenueContext } from "../_lib/foursquare";
 import { pickRandomSuburb } from "../_lib/suburbList";
+import { getCachedSuburbFromSupabase, saveCachedSuburbToSupabase } from "../../../lib/supabase";
 
 interface SuburbData {
   name: string;
@@ -177,7 +178,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid suburb name." }, { status: 400 });
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "GROQ_API_KEY is not configured." }, { status: 500 });
   }
@@ -199,15 +200,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       console.log(`[explore] random pick: "${resolvedSuburb}" for ${city}`);
     }
 
+    const currentSuburb: string = resolvedSuburb;
+
+    // Check Supabase global shared cache first (instant 50ms response)
+    const cachedData = await getCachedSuburbFromSupabase(city, currentSuburb);
+    if (cachedData) {
+      return NextResponse.json(cachedData);
+    }
+
     // Fetch Wikipedia + OSM in parallel — now always runs, for both paths.
     const [wikiContext, venues] = await Promise.all([
-      fetchSuburbWikiContext(resolvedSuburb, city),
-      fetchSuburbVenues(resolvedSuburb, city),
+      fetchSuburbWikiContext(currentSuburb, city),
+      fetchSuburbVenues(currentSuburb, city),
     ]);
 
     const venuesAvailable = venues.length > 0;
-    const venueContext = buildVenueContext(venues, resolvedSuburb, city);
-    const text = await generate(client, buildPrompt(city, resolvedSuburb, wikiContext, venueContext));
+    const venueContext = buildVenueContext(venues, currentSuburb, city);
+    const text = await generate(client, buildPrompt(city, currentSuburb, wikiContext, venueContext));
     const { is_suburb, ...parsed } = parseGeminiJson<RawSuburbResponse>(text);
 
     // Smaller fallback models sometimes return string fields as objects
@@ -244,7 +253,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    return NextResponse.json({ ...parsed, venuesAvailable, rawVenues: venues });
+    const responsePayload = { ...parsed, venuesAvailable, rawVenues: venues };
+
+    // Asynchronously save to Supabase cache for all future users worldwide
+    saveCachedSuburbToSupabase(city, parsed.name, responsePayload).catch((err) =>
+      console.warn("[supabase] background cache write failed:", err)
+    );
+
+    return NextResponse.json(responsePayload);
   } catch (err) {
     return handleApiError("explore", err);
   }
