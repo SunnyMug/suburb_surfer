@@ -1,11 +1,35 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SuburbData, CityName, PanelView, CITIES, TABS, LOADING_MESSAGES } from "../lib/types";
 import { getSuburbMapUrl, getVenueMapUrl, getDefaultMapUrl } from "../lib/utils";
+import { pickRandomSuburb, SUBURBS_BY_CITY } from "../lib/suburbList";
 import { MapDisplay } from "./MapDisplay";
 import { OverviewView, FoodView, HistoryView, DemographicsView } from "./SidebarViews";
+import { BinChickenGame } from "./BinChickenGame";
+
+function getCacheKey(city: string, suburb: string): string {
+  return `suburb_cache_${city.toLowerCase()}_${suburb.trim().toLowerCase()}`;
+}
+
+function getCachedSuburb(city: string, suburb: string): SuburbData | null {
+  try {
+    const raw = localStorage.getItem(getCacheKey(city, suburb));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function setCachedSuburb(city: string, suburb: string, data: SuburbData) {
+  try {
+    localStorage.setItem(getCacheKey(city, suburb), JSON.stringify(data));
+  } catch {
+    // Ignore quota exceeded
+  }
+}
 
 export function ClientPage() {
   const router = useRouter();
@@ -17,6 +41,8 @@ export function ClientPage() {
 
   const [selectedCity, setSelectedCity] = useState<CityName>(initialCity);
   const [suburb, setSuburb] = useState<SuburbData | null>(null);
+  const [pendingSuburb, setPendingSuburb] = useState<string | null>(null);
+  const [suburbLoadedPending, setSuburbLoadedPending] = useState<SuburbData | null>(null);
   const [loadingSuburb, setLoadingSuburb] = useState(false);
   const [errorSuburb, setErrorSuburb] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState(urlSuburb);
@@ -28,6 +54,10 @@ export function ClientPage() {
 
   const lastFetchRef = useRef<number>(0);
   const FETCH_COOLDOWN_MS = 3000;
+
+  // Prefetched buffer for instant random clicks
+  const prefetchedSuburbRef = useRef<{ city: CityName; data: SuburbData } | null>(null);
+  const prefetchTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync state when URL params change (e.g. user hits back button)
   useEffect(() => {
@@ -51,11 +81,14 @@ export function ClientPage() {
     return () => timers.forEach(clearTimeout);
   }, [loadingSuburb]);
 
+  // Progressive map display: updates immediately with pendingSuburb
   const mapUrl = selectedVenue
     ? getVenueMapUrl(selectedVenue.lat, selectedVenue.lng)
     : suburb
       ? getSuburbMapUrl(suburb.name, selectedCity)
-      : getDefaultMapUrl(selectedCity);
+      : pendingSuburb
+        ? getSuburbMapUrl(pendingSuburb, selectedCity)
+        : getDefaultMapUrl(selectedCity);
 
   function resetSectionData() {
     setVisibleFoodCount(3);
@@ -65,12 +98,54 @@ export function ClientPage() {
   function handleCityChange(city: CityName) {
     setSelectedCity(city);
     setSuburb(null);
+    setPendingSuburb(null);
+    setSuburbLoadedPending(null);
+    prefetchedSuburbRef.current = null;
     setErrorSuburb(null);
     setSearchInput("");
     setView("suburb");
     resetSectionData();
     router.push(`/?city=${city}`);
   }
+
+  const schedulePrefetch = useCallback((city: CityName, excludeSuburb?: string) => {
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+
+    // Wait 4 seconds of idle time after loading
+    prefetchTimerRef.current = setTimeout(async () => {
+      const list = SUBURBS_BY_CITY[city];
+      if (!list || list.length <= 1) return;
+
+      let candidate = pickRandomSuburb(city);
+      let attempts = 0;
+      while (candidate && candidate === excludeSuburb && attempts < 5) {
+        candidate = pickRandomSuburb(city);
+        attempts++;
+      }
+      if (!candidate) return;
+
+      // Check if candidate is already in client cache
+      const cached = getCachedSuburb(city, candidate);
+      if (cached) {
+        prefetchedSuburbRef.current = { city, data: cached };
+        return;
+      }
+
+      // Quietly fetch in the background
+      try {
+        const params = new URLSearchParams({ city, suburb: candidate });
+        const res = await fetch(`/api/explore?${params}`);
+        if (!res.ok) return;
+        const data: SuburbData & { error?: string } = await res.json();
+        if (data && !data.error) {
+          setCachedSuburb(city, data.name, data);
+          prefetchedSuburbRef.current = { city, data };
+        }
+      } catch {
+        // Silent fail
+      }
+    }, 4000);
+  }, []);
 
   async function fetchSuburb(suburbName?: string, overrideCity?: CityName) {
     const now = Date.now();
@@ -79,14 +154,52 @@ export function ClientPage() {
 
     const cityToUse = overrideCity || selectedCity;
 
-    setLoadingSuburb(true);
     setErrorSuburb(null);
     setView("suburb");
     setIsSearching(true);
     resetSectionData();
 
+    // 1. Instant check: Do we have an anticipatory prefetched random suburb ready?
+    if (!suburbName && prefetchedSuburbRef.current?.city === cityToUse) {
+      const ready = prefetchedSuburbRef.current.data;
+      prefetchedSuburbRef.current = null;
+      setSuburb(ready);
+      setPendingSuburb(null);
+      setSearchInput(ready.name);
+      setLoadingSuburb(false);
+      setSuburbLoadedPending(null);
+      router.push(`/?city=${cityToUse}&suburb=${encodeURIComponent(ready.name)}`);
+      schedulePrefetch(cityToUse, ready.name);
+      return;
+    }
+
+    // 2. Determine target suburb name (for immediate progressive map zoom & search feedback)
+    const targetSuburb = suburbName ? suburbName.trim() : (pickRandomSuburb(cityToUse) || "");
+    if (targetSuburb) {
+      setPendingSuburb(targetSuburb);
+      setSearchInput(targetSuburb);
+    }
+
+    // 3. Instant check: Is it in the client localStorage cache?
+    if (targetSuburb) {
+      const cached = getCachedSuburb(cityToUse, targetSuburb);
+      if (cached) {
+        setSuburb(cached);
+        setPendingSuburb(null);
+        setLoadingSuburb(false);
+        setSuburbLoadedPending(null);
+        router.push(`/?city=${cityToUse}&suburb=${encodeURIComponent(cached.name)}`);
+        schedulePrefetch(cityToUse, cached.name);
+        return;
+      }
+    }
+
+    // 4. Fetch from server API with game active
+    setLoadingSuburb(true);
+    setSuburbLoadedPending(null);
+
     const params = new URLSearchParams({ city: cityToUse });
-    if (suburbName) params.set("suburb", suburbName);
+    if (targetSuburb) params.set("suburb", targetSuburb);
 
     try {
       const res = await fetch(`/api/explore?${params}`);
@@ -94,16 +207,27 @@ export function ClientPage() {
       if (!res.ok || data.error)
         throw new Error(data.error ?? `Server error (${res.status})`);
 
-      setSuburb(data);
-      setSearchInput(data.name);
+      setCachedSuburb(cityToUse, data.name, data);
+      setSuburbLoadedPending(data);
       router.push(`/?city=${cityToUse}&suburb=${encodeURIComponent(data.name)}`);
+      schedulePrefetch(cityToUse, data.name);
     } catch (err) {
       setErrorSuburb(
         err instanceof Error
           ? err.message
           : "Something went wrong. Give it another crack!",
       );
-    } finally {
+      setLoadingSuburb(false);
+      setSuburbLoadedPending(null);
+    }
+  }
+
+  function handleRevealSuburb() {
+    if (suburbLoadedPending) {
+      setSuburb(suburbLoadedPending);
+      setPendingSuburb(null);
+      setSearchInput(suburbLoadedPending.name);
+      setSuburbLoadedPending(null);
       setLoadingSuburb(false);
     }
   }
@@ -221,14 +345,13 @@ export function ClientPage() {
           </div>
         </div>
 
-        {/* LOADING STATE */}
+        {/* LOADING STATE & MINIGAME */}
         {loadingSuburb && (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 gap-5">
-            <div className="w-11 h-11 rounded-full border-4 border-indigo-200 border-t-indigo-500 animate-spin" />
-            <p className="text-sm text-slate-500 text-center leading-snug max-w-[16rem]">
-              {loadingMessage}
-            </p>
-          </div>
+          <BinChickenGame
+            suburbName={suburbLoadedPending?.name || pendingSuburb || undefined}
+            isSuburbReady={!!suburbLoadedPending}
+            onViewSuburb={handleRevealSuburb}
+          />
         )}
 
         {/* VIEWS */}
