@@ -17,19 +17,19 @@ export interface FsqVenue {
 
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const OVERPASS_ENDPOINTS = [
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
-  "https://overpass.openstreetmap.ru/api/interpreter",
 ];
 
 const NOMINATIM_TIMEOUT_MS = 5_000;
-// Fail fast on each Overpass endpoint — 3 endpoints × 5s = 15s max wait before
-// surfacing the "venue data unavailable" notice. Previously 12s × 3 = 36s.
-const OVERPASS_TIMEOUT_MS  = 5_000;
+// Parallel Overpass query timeout: race all endpoints concurrently
+const OVERPASS_TIMEOUT_MS  = 8_000;
 // Fetch a larger pool so we can score and surface the best-documented venues.
 const FETCH_LIMIT = 50;
 const MAX_VENUES  = 30;
-const USER_AGENT  = "SuburbSurfer/1.0 (educational project)";
+const USER_AGENT  = "SuburbSurfer/1.0 (educational project; contact@suburbsurfer.internal)";
 
 const CITY_TO_STATE: Record<string, string> = {
   Sydney: "New South Wales",
@@ -45,32 +45,38 @@ const CITY_TO_STATE: Record<string, string> = {
 interface NominatimResult {
   boundingbox: [string, string, string, string]; // [minLat, maxLat, minLon, maxLon]
   type: string;
+  class: string;
   display_name: string;
+  name?: string;
+  lat: string;
+  lon: string;
   osm_type: string;
   osm_id: number;
 }
 
 // Preference order for Nominatim result types — higher = better.
-// "administrative" often matches the LGA boundary (huge area) rather than
-// the suburb itself, so it scores lowest among area types.
+// Note: "residential" is deliberately excluded because Nominatim classifies
+// residential streets (highway=residential) as type "residential".
 const TYPE_PRIORITY: Record<string, number> = {
   suburb:        10,
   neighbourhood:  9,
-  residential:    8,
-  hamlet:         7,
-  quarter:        6,
-  city_district:  5,
-  village:        4,
-  town:           3,
-  municipality:   2,
-  administrative: 1,
+  quarter:        8,
+  city_district:  7,
+  hamlet:         6,
+  village:        5,
+  town:           4,
+  municipality:   3,
+  administrative: 2,
 };
 
 // If a Nominatim result's bbox exceeds this in either dimension it's almost
-// certainly an LGA/district boundary rather than a suburb (~16 km threshold).
-const MAX_BBOX_DEGREES = 0.15;
+// certainly a whole metropolitan region or state (~35 km threshold).
+const MAX_BBOX_DEGREES = 0.30;
 
-async function nominatimSearch(q: string): Promise<NominatimResult | null> {
+async function nominatimSearch(
+  q: string,
+  suburbName: string
+): Promise<NominatimResult | null> {
   const params = new URLSearchParams({
     q,
     format: "json",
@@ -84,15 +90,35 @@ async function nominatimSearch(q: string): Promise<NominatimResult | null> {
       signal: AbortSignal.timeout(NOMINATIM_TIMEOUT_MS),
     });
     if (!res.ok) return null;
-    const results: NominatimResult[] = await res.json();
+    const text = await res.text();
+    if (text.trimStart().startsWith("<")) return null;
+    const results: NominatimResult[] = JSON.parse(text);
 
-    // Only consider geographic area types — aerodromes, POIs, buildings etc.
-    // are excluded. Among qualifying results, return the most specific type.
-    const areaResults = results.filter((r) => r.type in TYPE_PRIORITY);
-    if (areaResults.length === 0) return null;
-    return areaResults.sort(
-      (a, b) => (TYPE_PRIORITY[b.type] ?? 0) - (TYPE_PRIORITY[a.type] ?? 0)
-    )[0];
+    // Only consider geographic area types — highways, railways, buildings etc. are excluded.
+    const valid = results.filter((r) => {
+      if (r.class === "highway" || r.class === "railway" || r.class === "building") return false;
+      return (r.class === "place" || r.class === "boundary") && r.type in TYPE_PRIORITY;
+    });
+
+    if (valid.length === 0) return null;
+
+    // Prefer exact suburb match and deprioritize LGA councils (e.g. "Lane Cove" vs "Lane Cove Municipal Council")
+    const sorted = valid.sort((a, b) => {
+      const aIsCouncil = /council|shire|municipality/i.test(a.display_name);
+      const bIsCouncil = /council|shire|municipality/i.test(b.display_name);
+      if (aIsCouncil !== bIsCouncil) return aIsCouncil ? 1 : -1;
+
+      const aName = (a.name || "").toLowerCase();
+      const bName = (b.name || "").toLowerCase();
+      const target = suburbName.toLowerCase();
+      const aExact = aName === target;
+      const bExact = bName === target;
+      if (aExact !== bExact) return aExact ? -1 : 1;
+
+      return (TYPE_PRIORITY[b.type] ?? 0) - (TYPE_PRIORITY[a.type] ?? 0);
+    });
+
+    return sorted[0];
   } catch {
     return null;
   }
@@ -100,8 +126,77 @@ async function nominatimSearch(q: string): Promise<NominatimResult | null> {
 
 interface GeoData {
   bbox: [number, number, number, number];
+  lat: number;
+  lng: number;
   osmType: string;
   osmId: number;
+}
+
+async function photonSearch(suburb: string, city: string): Promise<GeoData | null> {
+  const state = CITY_TO_STATE[city] ?? city;
+  for (const q of [`${suburb}, ${city}, Australia`, `${suburb}, ${state}, Australia`]) {
+    try {
+      const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const f = data.features?.[0];
+      if (!f?.geometry?.coordinates) continue;
+      const [lon, lat] = f.geometry.coordinates;
+      let minLat = lat - 0.015;
+      let maxLat = lat + 0.015;
+      let minLon = lon - 0.015;
+      let maxLon = lon + 0.015;
+
+      if (Array.isArray(f.properties?.extent) && f.properties.extent.length === 4) {
+        const [eMinLon, eMaxLat, eMaxLon, eMinLat] = f.properties.extent;
+        minLat = Math.min(eMinLat, eMaxLat);
+        maxLat = Math.max(eMinLat, eMaxLat);
+        minLon = Math.min(eMinLon, eMaxLon);
+        maxLon = Math.max(eMinLon, eMaxLon);
+      }
+
+      console.log(`[osm] geocoded "${suburb}, ${city}" via Photon fallback (lat: ${lat}, lng: ${lon})`);
+      return {
+        bbox: [minLat, maxLat, minLon, maxLon],
+        lat,
+        lng: lon,
+        osmType: f.properties?.osm_type ?? "node",
+        osmId: f.properties?.osm_id ?? 0,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function openMeteoSearch(suburb: string, city: string): Promise<GeoData | null> {
+  try {
+    const res = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(suburb)}&count=5&language=en&format=json`,
+      { signal: AbortSignal.timeout(3000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = data.results ?? [];
+    const match = results.find((r: any) => r.country_code === "AU") ?? results[0];
+    if (!match?.latitude || !match?.longitude) return null;
+    const lat = match.latitude;
+    const lng = match.longitude;
+    const pad = 0.015;
+    console.log(`[osm] geocoded "${suburb}, ${city}" via Open-Meteo fallback (lat: ${lat}, lng: ${lng})`);
+    return {
+      bbox: [lat - pad, lat + pad, lng - pad, lng + pad],
+      lat,
+      lng,
+      osmType: "node",
+      osmId: match.id ?? 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function getGeoData(
@@ -110,12 +205,13 @@ async function getGeoData(
 ): Promise<GeoData | null> {
   const state = CITY_TO_STATE[city] ?? city;
 
+  // Search candidates: test state first for ACT/Canberra and state disambiguation, then city
   for (const q of [
-    `${suburb}, ${city}, Australia`,
     `${suburb}, ${state}, Australia`,
+    `${suburb}, ${city}, Australia`,
     `${suburb}, Australia`,
   ]) {
-    const result = await nominatimSearch(q);
+    const result = await nominatimSearch(q, suburb);
     if (!result) continue;
 
     const [minLat, maxLat, minLon, maxLon] = result.boundingbox.map(Number);
@@ -123,8 +219,6 @@ async function getGeoData(
     const height = maxLat - minLat;
 
     if (width > MAX_BBOX_DEGREES || height > MAX_BBOX_DEGREES) {
-      // Bounding box is too large — almost certainly an LGA or district boundary.
-      // Try the next, more specific query instead.
       console.warn(
         `[osm] bbox for "${q}" too large (${width.toFixed(3)}°×${height.toFixed(3)}°, type: ${result.type}) — skipping`
       );
@@ -135,16 +229,130 @@ async function getGeoData(
     console.log(`[osm] geocoded "${q}" (type: ${result.type}, osm_type: ${result.osm_type}, osm_id: ${result.osm_id})`);
     return {
       bbox: [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad],
+      lat: Number(result.lat),
+      lng: Number(result.lon),
       osmType: result.osm_type,
       osmId: result.osm_id
     };
   }
 
+  // Fallback 1: Photon (Komoot OSM) when Nominatim returns 429 or is rate-limited
+  const photon = await photonSearch(suburb, city);
+  if (photon) return photon;
+
+  // Fallback 2: Open-Meteo geocoding
+  const openMeteo = await openMeteoSearch(suburb, city);
+  if (openMeteo) return openMeteo;
+
   return null;
+}
+
+function parseVenuesFromOsmData(data: any): FsqVenue[] {
+  const raw: Array<{ venue: FsqVenue; score: number }> = [];
+
+  for (const el of data.elements ?? []) {
+    const tags: Record<string, string> = el.tags ?? {};
+    const name = tags.name;
+    if (!name) continue;
+
+    const amenity = tags.amenity ?? "restaurant";
+    const category =
+      amenity === "cafe" ? "Café"
+      : amenity === "bar" ? "Bar"
+      : amenity === "fast_food" ? "Fast Food"
+      : "Restaurant";
+
+    // Score by data completeness — well-documented venues tend to be
+    // more established. Ways (polygons) are usually larger permanent venues.
+    let score = el.type === "way" ? 2 : 0;
+    if (tags.cuisine)                                    score += 3;
+    if (tags.website || tags["contact:website"])         score += 2;
+    if (tags.phone   || tags["contact:phone"])           score += 1;
+    if (tags.opening_hours)                              score += 1;
+    if (tags["addr:street"] || tags["addr:housenumber"]) score += 1;
+
+    const cuisine = tags.cuisine?.replace(/;.*/, "").trim(); // first value only
+    
+    const lat = el.lat ?? el.center?.lat;
+    const lng = el.lon ?? el.center?.lon;
+    
+    if (lat !== undefined && lng !== undefined) {
+      raw.push({ 
+        venue: { name, category, lat, lng, ...(cuisine ? { cuisine } : {}) }, 
+        score 
+      });
+    }
+  }
+
+  // Sort best-documented first, deduplicate by name, take top MAX_VENUES.
+  const seen = new Set<string>();
+  return raw
+    .sort((a, b) => b.score - a.score)
+    .filter(({ venue }) => {
+      const key = venue.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_VENUES)
+    .map(({ venue }) => venue);
+}
+
+async function fetchOverpassInParallel(
+  query: string,
+  timeoutMs: number = OVERPASS_TIMEOUT_MS
+): Promise<FsqVenue[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const fetchEndpoint = async (endpoint: string): Promise<FsqVenue[]> => {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": USER_AGENT,
+        },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        throw new Error(`status ${res.status}`);
+      }
+
+      const text = await res.text();
+      if (text.trimStart().startsWith("<")) {
+        throw new Error("XML error response");
+      }
+
+      const data = JSON.parse(text);
+      const venues = parseVenuesFromOsmData(data);
+      if (venues.length === 0) {
+        throw new Error("No venues found");
+      }
+      return venues;
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  try {
+    const venues = await Promise.any(
+      OVERPASS_ENDPOINTS.map((endpoint) => fetchEndpoint(endpoint))
+    );
+    controller.abort();
+    clearTimeout(timer);
+    return venues;
+  } catch {
+    clearTimeout(timer);
+    return [];
+  }
 }
 
 /**
  * Fetches real food & drink venues for a suburb via OpenStreetMap.
+ * Queries multiple Overpass mirrors concurrently in parallel for minimum latency.
  * Returns an empty array silently on failure — callers should treat this
  * as optional context and proceed without it if empty.
  */
@@ -158,110 +366,31 @@ export async function fetchSuburbVenues(
     return [];
   }
 
-  const { bbox, osmType, osmId } = geo;
-  
-  let areaId: number | null = null;
-  if (osmType === "relation") {
-    areaId = 3600000000 + Number(osmId);
-  } else if (osmType === "way") {
-    areaId = 2400000000 + Number(osmId);
+  const { bbox, lat, lng } = geo;
+  const [minLat, maxLat, minLon, maxLon] = bbox;
+  const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
+
+  // Spatial bounding box query is universally supported across all Overpass mirrors
+  const bboxQuery = `[out:json][timeout:8];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out center ${FETCH_LIMIT};`;
+
+  console.log(`[osm] querying Overpass endpoints in parallel for "${suburb}, ${city}"`);
+  let venues = await fetchOverpassInParallel(bboxQuery, OVERPASS_TIMEOUT_MS);
+
+  // If bounding box had 0 venues (e.g. very small or purely residential suburb),
+  // fallback to a 2000m radius around the suburb's center coordinates
+  if (venues.length === 0 && !isNaN(lat) && !isNaN(lng)) {
+    console.log(`[osm] bbox returned no venues, retrying with 2000m radius around (${lat}, ${lng}) for "${suburb}, ${city}"`);
+    const radiusQuery = `[out:json][timeout:8];(node(around:2000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];way(around:2000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];);out center ${FETCH_LIMIT};`;
+    venues = await fetchOverpassInParallel(radiusQuery, 6_000);
   }
 
-  let query: string;
-  if (areaId !== null) {
-    // Query using the strict polygon boundary (area) of the suburb
-    query = `[out:json][timeout:4];area(${areaId})->.searchArea;(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](area.searchArea);way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](area.searchArea););out center ${FETCH_LIMIT};`;
+  if (venues.length > 0) {
+    console.log(`[osm] found ${venues.length} venues for "${suburb}, ${city}"`);
   } else {
-    // Fallback to bounding box if it's a node
-    const [minLat, maxLat, minLon, maxLon] = bbox;
-    const bboxStr = `${minLat},${minLon},${maxLat},${maxLon}`;
-    query = `[out:json][timeout:4];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out center ${FETCH_LIMIT};`;
+    console.warn(`[osm] all Overpass endpoints failed or returned no venues for "${suburb}, ${city}"`);
   }
 
-  for (const endpoint of OVERPASS_ENDPOINTS) {
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": USER_AGENT
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(OVERPASS_TIMEOUT_MS),
-      });
-
-      if (!res.ok) {
-        console.warn(`[osm] ${endpoint} returned ${res.status} — trying next`);
-        continue;
-      }
-
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) {
-        // Overpass returned XML — server-side error (rate limit, memory, etc.)
-        console.warn(`[osm] ${endpoint} returned XML error — trying next`);
-        continue;
-      }
-
-      const data = JSON.parse(text);
-      const raw: Array<{ venue: FsqVenue; score: number }> = [];
-
-      for (const el of data.elements ?? []) {
-        const tags: Record<string, string> = el.tags ?? {};
-        const name = tags.name;
-        if (!name) continue;
-
-        const amenity = tags.amenity ?? "restaurant";
-        const category =
-          amenity === "cafe" ? "Café"
-          : amenity === "bar" ? "Bar"
-          : amenity === "fast_food" ? "Fast Food"
-          : "Restaurant";
-
-        // Score by data completeness — well-documented venues tend to be
-        // more established. Ways (polygons) are usually larger permanent venues.
-        let score = el.type === "way" ? 2 : 0;
-        if (tags.cuisine)                                    score += 3;
-        if (tags.website || tags["contact:website"])         score += 2;
-        if (tags.phone   || tags["contact:phone"])           score += 1;
-        if (tags.opening_hours)                              score += 1;
-        if (tags["addr:street"] || tags["addr:housenumber"]) score += 1;
-
-        const cuisine = tags.cuisine?.replace(/;.*/, "").trim(); // first value only
-        
-        const lat = el.lat ?? el.center?.lat;
-        const lng = el.lon ?? el.center?.lon;
-        
-        if (lat !== undefined && lng !== undefined) {
-          raw.push({ 
-            venue: { name, category, lat, lng, ...(cuisine ? { cuisine } : {}) }, 
-            score 
-          });
-        }
-      }
-
-      // Sort best-documented first, deduplicate by name, take top MAX_VENUES.
-      const seen = new Set<string>();
-      const venues: FsqVenue[] = raw
-        .sort((a, b) => b.score - a.score)
-        .filter(({ venue }) => {
-          const key = venue.name.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .slice(0, MAX_VENUES)
-        .map(({ venue }) => venue);
-
-      console.log(`[osm] found ${venues.length} venues for "${suburb}, ${city}" (pool: ${raw.length})`);
-      return venues;
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      console.warn(`[osm] ${endpoint} failed (${reason}) — trying next`);
-    }
-  }
-
-  console.warn(`[osm] all Overpass endpoints failed for "${suburb}, ${city}"`);
-  return [];
+  return venues;
 }
 
 /**
