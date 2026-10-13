@@ -19,19 +19,38 @@ export interface SuburbData {
   venuesAvailable: boolean;
   image_url?: string;
   rawVenues?: { name: string; category: string; cuisine?: string; lat: number; lng: number }[];
+  geo?: SuburbGeo;
+}
+
+export interface SuburbGeo {
+  lat: number;
+  lng: number;
+  bbox?: [number, number, number, number];
+  polygon?: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: any;
+  };
 }
 
 export type PanelView = "suburb" | "food" | "history" | "demographics";
 
+export interface CityMeta {
+  name: string;
+  state: string;
+  lat: number;
+  lng: number;
+  zoom: number;
+}
+
 export const CITIES = [
-  { name: "Sydney", state: "NSW" },
-  { name: "Melbourne", state: "VIC" },
-  { name: "Brisbane", state: "QLD" },
-  { name: "Perth", state: "WA" },
-  { name: "Adelaide", state: "SA" },
-  { name: "Canberra", state: "ACT" },
-  { name: "Hobart", state: "TAS" },
-  { name: "Darwin", state: "NT" },
+  { name: "Sydney", state: "NSW", lat: -33.8688, lng: 151.2093, zoom: 12 },
+  { name: "Melbourne", state: "VIC", lat: -37.8136, lng: 144.9631, zoom: 12 },
+  { name: "Brisbane", state: "QLD", lat: -27.4698, lng: 153.0251, zoom: 12 },
+  { name: "Perth", state: "WA", lat: -31.9505, lng: 115.8605, zoom: 12 },
+  { name: "Adelaide", state: "SA", lat: -34.9285, lng: 138.6007, zoom: 12 },
+  { name: "Canberra", state: "ACT", lat: -35.2809, lng: 149.1300, zoom: 12 },
+  { name: "Hobart", state: "TAS", lat: -42.8821, lng: 147.3272, zoom: 12 },
+  { name: "Darwin", state: "NT", lat: -12.4634, lng: 130.8456, zoom: 12 },
 ] as const;
 
 export type CityName = (typeof CITIES)[number]["name"];

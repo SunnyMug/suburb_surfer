@@ -52,6 +52,10 @@ interface NominatimResult {
   lon: string;
   osm_type: string;
   osm_id: number;
+  geojson?: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: any;
+  };
 }
 
 // Preference order for Nominatim result types — higher = better.
@@ -82,6 +86,7 @@ async function nominatimSearch(
     format: "json",
     limit: "5",
     countrycodes: "au",
+    polygon_geojson: "1",
   });
 
   try {
@@ -124,12 +129,16 @@ async function nominatimSearch(
   }
 }
 
-interface GeoData {
+export interface GeoData {
   bbox: [number, number, number, number];
   lat: number;
   lng: number;
   osmType: string;
   osmId: number;
+  polygon?: {
+    type: "Polygon" | "MultiPolygon";
+    coordinates: any;
+  };
 }
 
 async function photonSearch(suburb: string, city: string): Promise<GeoData | null> {
@@ -225,14 +234,21 @@ async function getGeoData(
       continue;
     }
 
-    const pad = 0.005; // ~500m expansion to catch venues just over the boundary
-    console.log(`[osm] geocoded "${q}" (type: ${result.type}, osm_type: ${result.osm_type}, osm_id: ${result.osm_id})`);
+    const hasPolygon =
+      result.geojson &&
+      (result.geojson.type === "Polygon" || result.geojson.type === "MultiPolygon");
+
+    // Do not pad bounding box when official boundary polygon exists, preventing venues in adjacent suburbs from bleeding in
+    const pad = hasPolygon ? 0 : 0.002;
+    console.log(`[osm] geocoded "${q}" (type: ${result.type}, osm_type: ${result.osm_type}, osm_id: ${result.osm_id}, hasPolygon: ${Boolean(hasPolygon)})`);
+
     return {
       bbox: [minLat - pad, maxLat + pad, minLon - pad, maxLon + pad],
       lat: Number(result.lat),
       lng: Number(result.lon),
       osmType: result.osm_type,
-      osmId: result.osm_id
+      osmId: result.osm_id,
+      polygon: hasPolygon ? result.geojson : undefined,
     };
   }
 
@@ -247,13 +263,79 @@ async function getGeoData(
   return null;
 }
 
-function parseVenuesFromOsmData(data: any): FsqVenue[] {
+/**
+ * Ray-casting point-in-polygon containment test for GeoJSON Polygon and MultiPolygon geometries.
+ * Point is in [lng, lat] coordinate format.
+ */
+function isPointInRing(lng: number, lat: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+
+    const intersect = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+export function isPointInPolygon(
+  point: [number, number],
+  geometry?: { type: string; coordinates: any }
+): boolean {
+  if (!geometry || !geometry.coordinates || !geometry.type) return true;
+  const [lng, lat] = point;
+
+  if (geometry.type === "Polygon") {
+    const rings = geometry.coordinates;
+    if (!rings || rings.length === 0) return true;
+    if (!isPointInRing(lng, lat, rings[0])) return false;
+    // Ensure point does not sit within an interior exclusion ring (hole)
+    for (let i = 1; i < rings.length; i++) {
+      if (isPointInRing(lng, lat, rings[i])) return false;
+    }
+    return true;
+  }
+
+  if (geometry.type === "MultiPolygon") {
+    const polygons = geometry.coordinates;
+    if (!polygons || polygons.length === 0) return true;
+    for (const rings of polygons) {
+      if (rings && rings.length > 0 && isPointInRing(lng, lat, rings[0])) {
+        let inHole = false;
+        for (let i = 1; i < rings.length; i++) {
+          if (isPointInRing(lng, lat, rings[i])) {
+            inHole = true;
+            break;
+          }
+        }
+        if (!inHole) return true;
+      }
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function parseVenuesFromOsmData(data: any, targetSuburb?: string): FsqVenue[] {
   const raw: Array<{ venue: FsqVenue; score: number }> = [];
 
   for (const el of data.elements ?? []) {
     const tags: Record<string, string> = el.tags ?? {};
     const name = tags.name;
     if (!name) continue;
+
+    // If venue explicitly tags an address suburb that disagrees with target, skip it
+    const addrSuburb = tags["addr:suburb"]?.trim().toLowerCase();
+    if (addrSuburb && targetSuburb) {
+      const target = targetSuburb.toLowerCase();
+      if (addrSuburb !== target && !addrSuburb.includes(target) && !target.includes(addrSuburb)) {
+        continue;
+      }
+    }
 
     const amenity = tags.amenity ?? "restaurant";
     const category =
@@ -300,7 +382,8 @@ function parseVenuesFromOsmData(data: any): FsqVenue[] {
 
 async function fetchOverpassInParallel(
   query: string,
-  timeoutMs: number = OVERPASS_TIMEOUT_MS
+  timeoutMs: number = OVERPASS_TIMEOUT_MS,
+  targetSuburb?: string
 ): Promise<FsqVenue[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -327,7 +410,7 @@ async function fetchOverpassInParallel(
       }
 
       const data = JSON.parse(text);
-      const venues = parseVenuesFromOsmData(data);
+      const venues = parseVenuesFromOsmData(data, targetSuburb);
       if (venues.length === 0) {
         throw new Error("No venues found");
       }
@@ -351,19 +434,17 @@ async function fetchOverpassInParallel(
 }
 
 /**
- * Fetches real food & drink venues for a suburb via OpenStreetMap.
- * Queries multiple Overpass mirrors concurrently in parallel for minimum latency.
- * Returns an empty array silently on failure — callers should treat this
- * as optional context and proceed without it if empty.
+ * Fetches both the spatial geo metadata (centre, bounding box, polygon boundary)
+ * and verified dining venues for a suburb via OpenStreetMap.
  */
-export async function fetchSuburbVenues(
+export async function fetchSuburbGeoAndVenues(
   suburb: string,
   city: string
-): Promise<FsqVenue[]> {
+): Promise<{ venues: FsqVenue[]; geo: GeoData | null }> {
   const geo = await getGeoData(suburb, city);
   if (!geo) {
     console.warn(`[osm] could not geocode "${suburb}, ${city}"`);
-    return [];
+    return { venues: [], geo: null };
   }
 
   const { bbox, lat, lng } = geo;
@@ -374,23 +455,47 @@ export async function fetchSuburbVenues(
   const bboxQuery = `[out:json][timeout:8];(node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr});way["amenity"~"^(restaurant|cafe|bar|fast_food)$"](${bboxStr}););out center ${FETCH_LIMIT};`;
 
   console.log(`[osm] querying Overpass endpoints in parallel for "${suburb}, ${city}"`);
-  let venues = await fetchOverpassInParallel(bboxQuery, OVERPASS_TIMEOUT_MS);
+  let venues = await fetchOverpassInParallel(bboxQuery, OVERPASS_TIMEOUT_MS, suburb);
 
   // If bounding box had 0 venues (e.g. very small or purely residential suburb),
-  // fallback to a 2000m radius around the suburb's center coordinates
+  // fallback to a tighter radius query around the suburb's centre coordinates
   if (venues.length === 0 && !isNaN(lat) && !isNaN(lng)) {
-    console.log(`[osm] bbox returned no venues, retrying with 2000m radius around (${lat}, ${lng}) for "${suburb}, ${city}"`);
-    const radiusQuery = `[out:json][timeout:8];(node(around:2000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];way(around:2000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];);out center ${FETCH_LIMIT};`;
-    venues = await fetchOverpassInParallel(radiusQuery, 6_000);
+    console.log(`[osm] bbox returned no venues, retrying with 1000m radius around (${lat}, ${lng}) for "${suburb}, ${city}"`);
+    const radiusQuery = `[out:json][timeout:8];(node(around:1000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];way(around:1000,${lat},${lng})["amenity"~"^(restaurant|cafe|bar|fast_food)$"];);out center ${FETCH_LIMIT};`;
+    venues = await fetchOverpassInParallel(radiusQuery, 6_000, suburb);
+  }
+
+  // Strictly filter venues to ensure they reside within the official suburb boundary polygon
+  if (geo.polygon && venues.length > 0) {
+    const strictlyInside = venues.filter((v) => isPointInPolygon([v.lng, v.lat], geo.polygon));
+    console.log(
+      `[osm] polygon boundary filter: kept ${strictlyInside.length} of ${venues.length} venues within "${suburb}"`
+    );
+    if (strictlyInside.length > 0) {
+      venues = strictlyInside;
+    }
   }
 
   if (venues.length > 0) {
-    console.log(`[osm] found ${venues.length} venues for "${suburb}, ${city}"`);
+    console.log(`[osm] found ${venues.length} verified venues strictly inside "${suburb}, ${city}"`);
   } else {
     console.warn(`[osm] all Overpass endpoints failed or returned no venues for "${suburb}, ${city}"`);
   }
 
-  return venues;
+  return { venues, geo };
+}
+
+/**
+ * Fetches real food & drink venues for a suburb via OpenStreetMap.
+ * Queries multiple Overpass mirrors concurrently in parallel for minimum latency.
+ * Returns an empty array silently on failure.
+ */
+export async function fetchSuburbVenues(
+  suburb: string,
+  city: string
+): Promise<FsqVenue[]> {
+  const result = await fetchSuburbGeoAndVenues(suburb, city);
+  return result.venues;
 }
 
 /**

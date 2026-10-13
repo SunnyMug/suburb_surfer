@@ -5,7 +5,7 @@ import { createClient, generate } from "../_lib/groqClient";
 import { validateCity, sanitiseSuburb } from "../_lib/validateParams";
 import { checkRateLimit } from "../_lib/rateLimiter";
 import { fetchSuburbWikiContext, WikiContext } from "../_lib/wikipedia";
-import { fetchSuburbVenues, buildVenueContext } from "../_lib/foursquare";
+import { fetchSuburbGeoAndVenues, buildVenueContext } from "../_lib/foursquare";
 import { pickRandomSuburb } from "../_lib/suburbList";
 import { getCachedSuburbFromSupabase, saveCachedSuburbToSupabase } from "../../../lib/supabase";
 
@@ -209,9 +209,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     // Fetch Wikipedia + OSM in parallel — now always runs, for both paths.
-    const [wikiContext, venues] = await Promise.all([
+    const [wikiContext, { venues, geo }] = await Promise.all([
       fetchSuburbWikiContext(currentSuburb, city),
-      fetchSuburbVenues(currentSuburb, city),
+      fetchSuburbGeoAndVenues(currentSuburb, city),
     ]);
 
     const venuesAvailable = venues.length > 0;
@@ -253,7 +253,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const responsePayload = { ...parsed, venuesAvailable, rawVenues: venues };
+    const responsePayload = {
+      ...parsed,
+      venuesAvailable,
+      rawVenues: venues,
+      geo: geo
+        ? {
+            lat: geo.lat,
+            lng: geo.lng,
+            bbox: geo.bbox,
+            polygon: geo.polygon,
+          }
+        : undefined,
+    };
 
     // Asynchronously save to Supabase cache for all future users worldwide
     saveCachedSuburbToSupabase(city, parsed.name, responsePayload).catch((err) =>
