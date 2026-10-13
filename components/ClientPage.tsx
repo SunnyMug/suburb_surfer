@@ -2,12 +2,26 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { SuburbData, CityName, PanelView, CITIES, TABS, LOADING_MESSAGES } from "../lib/types";
-import { getSuburbMapUrl, getVenueMapUrl, getDefaultMapUrl } from "../lib/utils";
 import { pickRandomSuburb, SUBURBS_BY_CITY } from "../lib/suburbList";
-import { MapDisplay } from "./MapDisplay";
 import { OverviewView, FoodView, HistoryView, DemographicsView } from "./SidebarViews";
 import { BinChickenGame } from "./BinChickenGame";
+
+const MapDisplay = dynamic(
+  () => import("./MapDisplay").then((mod) => mod.MapDisplay),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 w-full h-[45%] md:h-full flex items-center justify-center bg-slate-100">
+        <div className="flex items-center gap-2 text-slate-400 text-sm font-semibold">
+          <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-ping" />
+          Initialising interactive map…
+        </div>
+      </div>
+    ),
+  }
+);
 
 function getCacheKey(city: string, suburb: string): string {
   return `suburb_cache_${city.toLowerCase()}_${suburb.trim().toLowerCase()}`;
@@ -47,7 +61,7 @@ export function ClientPage() {
   const [errorSuburb, setErrorSuburb] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState(urlSuburb);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedVenue, setSelectedVenue] = useState<{ lat: number; lng: number } | null>(null);
+  const [selectedVenue, setSelectedVenue] = useState<{ lat: number; lng: number; name?: string } | null>(null);
   const [visibleFoodCount, setVisibleFoodCount] = useState(3);
   const [view, setView] = useState<PanelView>("suburb");
   const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0].text);
@@ -80,15 +94,6 @@ export function ClientPage() {
     );
     return () => timers.forEach(clearTimeout);
   }, [loadingSuburb]);
-
-  // Progressive map display: updates immediately with pendingSuburb
-  const mapUrl = selectedVenue
-    ? getVenueMapUrl(selectedVenue.lat, selectedVenue.lng)
-    : suburb
-      ? getSuburbMapUrl(suburb.name, selectedCity)
-      : pendingSuburb
-        ? getSuburbMapUrl(pendingSuburb, selectedCity)
-        : getDefaultMapUrl(selectedCity);
 
   function resetSectionData() {
     setVisibleFoodCount(3);
@@ -236,11 +241,15 @@ export function ClientPage() {
     setVisibleFoodCount((prev) => prev + 3);
   }
 
-  function handleVenueClick(v: { lat?: number; lng?: number }) {
+  const handleVenueClick = useCallback((v: { lat?: number; lng?: number; name?: string }) => {
     if (v.lat && v.lng) {
-      setSelectedVenue({ lat: v.lat, lng: v.lng });
+      setSelectedVenue({ lat: v.lat, lng: v.lng, name: v.name });
     }
-  }
+  }, []);
+
+  const handleDismissVenue = useCallback(() => {
+    setSelectedVenue(null);
+  }, []);
 
   function handleTabClick(tabId: PanelView) {
     setView(tabId);
@@ -384,6 +393,7 @@ export function ClientPage() {
             visibleFoodCount={visibleFoodCount} 
             handleLoadMoreFood={handleLoadMoreFood} 
             handleVenueClick={handleVenueClick} 
+            selectedVenue={selectedVenue}
           />
         )}
 
@@ -421,8 +431,15 @@ export function ClientPage() {
         )}
       </aside>
 
-      {/* Full-screen interactive map with share buttons */}
-      <MapDisplay mapUrl={mapUrl} />
+      {/* Full-screen modern interactive vector map */}
+      <MapDisplay
+        city={selectedCity}
+        suburb={suburb}
+        pendingSuburb={pendingSuburb}
+        selectedVenue={selectedVenue}
+        onVenueClick={handleVenueClick}
+        onDismissVenue={handleDismissVenue}
+      />
     </main>
   );
 }

@@ -96,7 +96,14 @@ export function OverviewView({ suburb, selectedCity, cityMeta, fetchSuburb, load
   );
 }
 
-export function FoodView({ suburb, allVenues, visibleFoodCount, handleLoadMoreFood, handleVenueClick }: any) {
+export function FoodView({
+  suburb,
+  allVenues,
+  visibleFoodCount,
+  handleLoadMoreFood,
+  handleVenueClick,
+  selectedVenue,
+}: any) {
   if (!suburb) return null;
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
@@ -123,28 +130,56 @@ export function FoodView({ suburb, allVenues, visibleFoodCount, handleLoadMoreFo
         <h3 className="text-xs font-bold uppercase tracking-widest text-orange-700 mb-3">Where to Eat</h3>
         {suburb.venuesAvailable ? (
           <>
-            <ul className="space-y-4">
-              {allVenues.slice(0, visibleFoodCount).map((r: any, i: number) => (
-                <li key={i} className={`space-y-0.5 p-2 -mx-2 rounded-lg transition-colors ${r.lat ? 'cursor-pointer hover:bg-orange-100' : ''}`} onClick={() => handleVenueClick(r)}>
-                  <div className="flex justify-between items-start">
-                    <p className="text-sm font-semibold text-slate-800">
-                      {r.name} {r.lat && <span className="text-xs text-orange-400 ml-1">📍</span>}
-                    </p>
-                    {r.lat && r.lng && (
-                      <a 
-                        href={`https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="shrink-0 ml-2 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-md transition-colors"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        🚗 Go
-                      </a>
-                    )}
-                  </div>
-                  <p className="text-sm text-slate-600 leading-snug">{r.description}</p>
-                </li>
-              ))}
+            <ul className="space-y-3">
+              {allVenues.slice(0, visibleFoodCount).map((r: any, i: number) => {
+                const isSelected =
+                  selectedVenue &&
+                  ((r.lat && selectedVenue.lat === r.lat && selectedVenue.lng === r.lng) ||
+                    (r.name && selectedVenue.name?.toLowerCase() === r.name.toLowerCase()));
+
+                return (
+                  <li
+                    key={i}
+                    className={`space-y-1 p-2.5 rounded-xl border transition-all ${
+                      isSelected
+                        ? "bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200 shadow-xs"
+                        : "border-transparent bg-white/60 hover:bg-white hover:border-orange-200"
+                    } ${r.lat ? "cursor-pointer" : ""}`}
+                    onClick={() => handleVenueClick(r)}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <p className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                        <span>{r.name}</span>
+                        {r.lat && <span className="text-xs text-orange-500">📍</span>}
+                      </p>
+                      {r.lat && r.lng && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            className="text-xs font-bold text-indigo-600 bg-indigo-100 hover:bg-indigo-200 px-2 py-0.5 rounded-md transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleVenueClick(r);
+                            }}
+                          >
+                            🗺️ Pin
+                          </button>
+                          <a
+                            href={`https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            🚗 Go
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-sm text-slate-600 leading-snug">{r.description}</p>
+                  </li>
+                );
+              })}
             </ul>
             {visibleFoodCount < allVenues.length && (
               <button onClick={handleLoadMoreFood} className="mt-5 w-full py-2.5 px-4 rounded-xl font-semibold text-sm text-orange-700 bg-orange-100 hover:bg-orange-200 border border-orange-200 transition-all duration-200 active:scale-95 cursor-pointer">
