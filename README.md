@@ -8,12 +8,12 @@ Live at [suburb-surfer.vercel.app](https://suburb-surfer.vercel.app)
 
 ## Tech Stack
 
-- Next.js 15 (App Router), TypeScript, Tailwind CSS
-- Recharts for interactive demographic visualizations
+- Next.js (App Router), TypeScript, Tailwind CSS
+- MapLibre GL JS — GPU-accelerated vector map with Carto basemaps & custom boundary polygons
+- Recharts for interactive demographic visualisations
 - Groq Cloud — LLaMA 3.3 70B with LLaMA 3.1 8B as fallback
 - Wikipedia MediaWiki Action API
 - OpenStreetMap (Nominatim + Overpass)
-- Google Maps embed
 - Upstash Redis for rate limiting (optional)
 
 ---

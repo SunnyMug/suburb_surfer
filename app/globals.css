@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
   --background: #ffffff;
@@ -21,4 +22,41 @@
 
 body {
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Modern MapLibre popup & marker styling */
+.maplibregl-popup-content {
+  border-radius: 1rem !important;
+  padding: 0 !important;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.15) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  backdrop-filter: blur(12px) !important;
+  overflow: hidden;
+}
+
+.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: rgba(255, 255, 255, 0.98) !important;
+}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: rgba(255, 255, 255, 0.98) !important;
+}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: rgba(255, 255, 255, 0.98) !important;
+}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: rgba(255, 255, 255, 0.98) !important;
+}
+
+.maplibregl-popup-close-button {
+  font-size: 1rem !important;
+  padding: 0.25rem 0.5rem !important;
+  color: #64748b !important;
+  border-radius: 9999px !important;
+  outline: none !important;
+  transition: all 0.15s ease-in-out;
+}
+.maplibregl-popup-close-button:hover {
+  background: rgba(241, 245, 249, 0.8) !important;
+  color: #0f172a !important;
 }
