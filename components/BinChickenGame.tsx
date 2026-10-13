@@ -130,7 +130,7 @@ export function BinChickenGame({
     obstacles: [] as Obstacle[],
     particles: [] as Particle[],
     bgOffset: 0,
-    lastObstacleTime: 0,
+    obstacleTicks: 156, // Starts ready so the first obstacle spawns on game start
     wingAngle: 0,
     gravity: 0.11,
     jumpStrength: -3.2,
@@ -139,28 +139,19 @@ export function BinChickenGame({
 
   const jump = useCallback(() => {
     const g = gameStateRef.current;
-    if (g.state === "idle") {
+    if (g.state === "idle" || g.state === "gameover") {
       g.state = "playing";
       g.score = 0;
       g.birdY = 130;
       g.birdVelocity = g.jumpStrength;
       g.obstacles = [];
       g.particles = [];
+      g.obstacleTicks = 156;
       setScore(0);
       setGameState("playing");
       playSound("flap");
     } else if (g.state === "playing") {
       g.birdVelocity = g.jumpStrength;
-      playSound("flap");
-    } else if (g.state === "gameover") {
-      g.state = "playing";
-      g.score = 0;
-      g.birdY = 130;
-      g.birdVelocity = g.jumpStrength;
-      g.obstacles = [];
-      g.particles = [];
-      setScore(0);
-      setGameState("playing");
       playSound("flap");
     }
   }, [soundEnabled]);
@@ -196,12 +187,24 @@ export function BinChickenGame({
 
     let animId: number;
     let lastTime = performance.now();
+    let accumulator = 0;
+
+    // Normalise physics to 60 ticks per second (16.67ms per tick)
+    // Ensures identical gameplay speed whether on a 30Hz mobile power-saver mode or high-refresh screen
+    const TICK_MS = 1000 / 60;
+    const MAX_LAG_MS = 100; // Clamps lag catch-up if mobile app is backgrounded or throttled
 
     // Responsive setup
     const width = 360;
     const height = 280;
     canvas.width = width;
     canvas.height = height;
+
+    // Reusable sky gradient to avoid GC allocation churn per frame on mobile
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, height);
+    skyGradient.addColorStop(0, "#bae6fd"); // soft sky blue
+    skyGradient.addColorStop(0.7, "#e0f2fe");
+    skyGradient.addColorStop(1, "#f1f5f9");
 
     function spawnObstacle() {
       const g = gameStateRef.current;
@@ -362,10 +365,14 @@ export function BinChickenGame({
         ctx.arc(x + 8, y + h - 5, 2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Lid
+        // Lid with compatibility fallback for older mobile engines
         ctx.fillStyle = lidColor;
         ctx.beginPath();
-        ctx.roundRect(x, y + 2, binWidth, 9, 3);
+        if (typeof ctx.roundRect === "function") {
+          ctx.roundRect(x, y + 2, binWidth, 9, 3);
+        } else {
+          ctx.rect(x, y + 2, binWidth, 9);
+        }
         ctx.fill();
 
         // Lid handle
@@ -385,7 +392,11 @@ export function BinChickenGame({
       ctx.strokeStyle = "#ca8a04";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.roundRect(-4, -10, 8, 20, 2);
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(-4, -10, 8, 20, 2);
+      } else {
+        ctx.rect(-4, -10, 8, 20);
+      }
       ctx.fill();
       ctx.stroke();
       // Sparkle
@@ -396,25 +407,20 @@ export function BinChickenGame({
       ctx.restore();
     }
 
-    function gameLoop(now: number) {
-      if (!ctx) return;
-      const dt = Math.min((now - lastTime) / 1000, 0.1);
-      lastTime = now;
-
+    // Fixed physics step executed at 60Hz tick rate
+    function updatePhysics() {
       const g = gameStateRef.current;
-
-      // UPDATE
       if (g.state === "playing") {
         g.birdVelocity = Math.min(g.birdVelocity + g.gravity, 3.2);
         g.birdY += g.birdVelocity;
         g.birdAngle = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, g.birdVelocity * 0.08));
-        g.wingAngle = Math.sin(now * 0.012) * 0.4;
         g.bgOffset = (g.bgOffset + 1.0) % width;
 
-        // Spawn obstacles with generous spacing
-        if (now - g.lastObstacleTime > 2600) {
+        // Obstacles spawn every 156 ticks (2.6s) to preserve exact spatial gap
+        g.obstacleTicks++;
+        if (g.obstacleTicks >= 156) {
           spawnObstacle();
-          g.lastObstacleTime = now;
+          g.obstacleTicks = 0;
         }
 
         // Ground / Ceiling collision
@@ -425,7 +431,7 @@ export function BinChickenGame({
           createParticles(70, g.birdY, "#ef4444", 12);
         }
 
-        // Update obstacles - gentler scroll speed
+        // Update obstacles - scroll speed calibrated to 1.35 px per 60Hz tick
         const birdX = 70;
         const birdRadius = 7.5;
 
@@ -484,6 +490,35 @@ export function BinChickenGame({
             g.obstacles.splice(i, 1);
           }
         }
+      }
+
+      // Update particles (fixed tick decay)
+      for (let i = g.particles.length - 1; i >= 0; i--) {
+        const p = g.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= (1 / 60) * 2.2;
+        if (p.life <= 0) g.particles.splice(i, 1);
+      }
+    }
+
+    function gameLoop(now: number) {
+      if (!ctx) return;
+      const elapsed = Math.min(now - lastTime, MAX_LAG_MS);
+      lastTime = now;
+      accumulator += elapsed;
+
+      // Execute fixed physics steps so movement speed is independent of screen refresh rate
+      while (accumulator >= TICK_MS) {
+        updatePhysics();
+        accumulator -= TICK_MS;
+      }
+
+      const g = gameStateRef.current;
+
+      // Update visual animations smoothly using current timestamp
+      if (g.state === "playing") {
+        g.wingAngle = Math.sin(now * 0.012) * 0.4;
       } else if (g.state === "idle") {
         // Gentle hovering in place
         g.birdY = 130 + Math.sin(now * 0.004) * 8;
@@ -491,23 +526,10 @@ export function BinChickenGame({
         g.birdAngle = 0;
       }
 
-      // Update particles
-      for (let i = g.particles.length - 1; i >= 0; i--) {
-        const p = g.particles[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.life -= dt * 2.2;
-        if (p.life <= 0) g.particles.splice(i, 1);
-      }
-
       // DRAW
       ctx.clearRect(0, 0, width, height);
 
       // Sky gradient
-      const skyGradient = ctx.createLinearGradient(0, 0, 0, height);
-      skyGradient.addColorStop(0, "#bae6fd"); // soft sky blue
-      skyGradient.addColorStop(0.7, "#e0f2fe");
-      skyGradient.addColorStop(1, "#f1f5f9");
       ctx.fillStyle = skyGradient;
       ctx.fillRect(0, 0, width, height);
 
@@ -625,7 +647,11 @@ export function BinChickenGame({
         {gameState === "idle" && (
           <div
             onClick={jump}
-            className="absolute inset-0 bg-slate-900/25 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 cursor-pointer"
+            onTouchStart={(e) => {
+              e.preventDefault();
+              jump();
+            }}
+            className="absolute inset-0 bg-slate-900/25 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 cursor-pointer select-none"
           >
             <BinChickenIcon className="w-14 h-14 mb-1 drop-shadow-md" />
             <h3 className="text-white font-black text-lg tracking-tight drop-shadow-sm">
@@ -644,7 +670,13 @@ export function BinChickenGame({
         {gameState === "gameover" && (
           <div
             onClick={jump}
-            className="absolute inset-0 bg-slate-900/35 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 cursor-pointer animate-in fade-in duration-200"
+            onTouchStart={(e) => {
+              if ((e.target as HTMLElement).tagName !== "BUTTON") {
+                e.preventDefault();
+                jump();
+              }
+            }}
+            className="absolute inset-0 bg-slate-900/35 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 cursor-pointer animate-in fade-in duration-200 select-none"
           >
             <span className="text-2xl mb-1">🗑️</span>
             <h3 className="text-white font-black text-base drop-shadow-sm">
@@ -659,7 +691,12 @@ export function BinChickenGame({
                   e.stopPropagation();
                   jump();
                 }}
-                className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-900 text-xs font-bold rounded-xl shadow-md active:scale-95 transition-transform"
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  jump();
+                }}
+                className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-900 text-xs font-bold rounded-xl shadow-md active:scale-95 transition-transform cursor-pointer"
               >
                 Try Again
               </button>
@@ -669,7 +706,12 @@ export function BinChickenGame({
                     e.stopPropagation();
                     onViewSuburb();
                   }}
-                  className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-transform"
+                  onTouchStart={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onViewSuburb();
+                  }}
+                  className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-transform cursor-pointer"
                 >
                   View Suburb ➔
                 </button>
