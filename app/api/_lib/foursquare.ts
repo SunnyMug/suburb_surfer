@@ -7,6 +7,8 @@
  * OSM provides equivalent coverage for Australian suburbs at no cost.
  */
 
+import { OVERPASS_ENDPOINTS, USER_AGENT, logOverpassFailures } from "./overpass";
+
 export interface FsqVenue {
   name: string;
   category: string;
@@ -16,12 +18,6 @@ export interface FsqVenue {
 }
 
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
-const OVERPASS_ENDPOINTS = [
-  "https://lz4.overpass-api.de/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.private.coffee/api/interpreter",
-];
 
 const NOMINATIM_TIMEOUT_MS = 5_000;
 // Parallel Overpass query timeout: race all endpoints concurrently
@@ -29,7 +25,6 @@ const OVERPASS_TIMEOUT_MS  = 8_000;
 // Fetch a larger pool so we can score and surface the best-documented venues.
 const FETCH_LIMIT = 50;
 const MAX_VENUES  = 30;
-const USER_AGENT  = "SuburbSurfer/1.0 (educational project; contact@suburbsurfer.internal)";
 
 const CITY_TO_STATE: Record<string, string> = {
   Sydney: "New South Wales",
@@ -427,8 +422,9 @@ async function fetchOverpassInParallel(
     controller.abort();
     clearTimeout(timer);
     return venues;
-  } catch {
+  } catch (err) {
     clearTimeout(timer);
+    logOverpassFailures(err);
     return [];
   }
 }

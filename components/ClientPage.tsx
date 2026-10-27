@@ -129,9 +129,9 @@ export function ClientPage() {
       }
       if (!candidate) return;
 
-      // Check if candidate is already in client cache
+      // Check if candidate is already in client cache with full transport data
       const cached = getCachedSuburb(city, candidate);
-      if (cached) {
+      if (cached && cached.transport) {
         prefetchedSuburbRef.current = { city, data: cached };
         return;
       }
@@ -165,7 +165,7 @@ export function ClientPage() {
     resetSectionData();
 
     // 1. Instant check: Do we have an anticipatory prefetched random suburb ready?
-    if (!suburbName && prefetchedSuburbRef.current?.city === cityToUse) {
+    if (!suburbName && prefetchedSuburbRef.current?.city === cityToUse && prefetchedSuburbRef.current.data.transport) {
       const ready = prefetchedSuburbRef.current.data;
       prefetchedSuburbRef.current = null;
       setSuburb(ready);
@@ -185,10 +185,10 @@ export function ClientPage() {
       setSearchInput(targetSuburb);
     }
 
-    // 3. Instant check: Is it in the client localStorage cache?
+    // 3. Instant check: Is it in the client localStorage cache with transport data?
     if (targetSuburb) {
       const cached = getCachedSuburb(cityToUse, targetSuburb);
-      if (cached) {
+      if (cached && cached.transport) {
         setSuburb(cached);
         setPendingSuburb(null);
         setLoadingSuburb(false);

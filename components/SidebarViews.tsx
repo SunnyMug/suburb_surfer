@@ -66,6 +66,42 @@ export function OverviewView({ suburb, selectedCity, cityMeta, fetchSuburb, load
             </div>
           </div>
           <p className="text-slate-600 text-base leading-relaxed">{suburb.summary}</p>
+          {suburb.transport && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm">🚆</span>
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-800">Public Transport</h3>
+                </div>
+                <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Connectivity
+                </span>
+              </div>
+              <p className="text-sm font-semibold text-emerald-950 leading-relaxed">
+                {suburb.transport.summary}
+              </p>
+              {suburb.transport.stops && suburb.transport.stops.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-3 pt-2.5 border-t border-emerald-200/60">
+                  {suburb.transport.stops.slice(0, 8).map((stop: any, idx: number) => {
+                    const icon =
+                      stop.type === "train" ? "🚆" : stop.type === "tram" ? "🚊" : stop.type === "ferry" ? "⛴️" : "🚌";
+                    const distLabel =
+                      !stop.isInsideBoundary && stop.distanceMetres ? ` (${stop.distanceMetres}m)` : "";
+                    return (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-white/90 border border-emerald-200 text-emerald-900 shadow-2xs"
+                        title={stop.isInsideBoundary ? "Within suburb boundary" : `Bordering station approx. ${stop.distanceMetres}m away`}
+                      >
+                        <span className="text-xs">{icon}</span>
+                        <span className="truncate max-w-[170px]">{stop.name}{distLabel}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           <div className="bg-violet-50 border border-violet-200 rounded-xl p-4">
             <h3 className="text-xs font-bold uppercase tracking-widest text-violet-700 mb-2">Name Origin</h3>
             <p className="text-sm text-slate-700 leading-relaxed">{suburb.name_etymology}</p>

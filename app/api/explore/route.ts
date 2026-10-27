@@ -6,6 +6,7 @@ import { validateCity, sanitiseSuburb } from "../_lib/validateParams";
 import { checkRateLimit } from "../_lib/rateLimiter";
 import { fetchSuburbWikiContext, WikiContext } from "../_lib/wikipedia";
 import { fetchSuburbGeoAndVenues, buildVenueContext } from "../_lib/foursquare";
+import { fetchSuburbTransport } from "../_lib/transport";
 import { pickRandomSuburb } from "../_lib/suburbList";
 import { getCachedSuburbFromSupabase, saveCachedSuburbToSupabase } from "../../../lib/supabase";
 
@@ -205,6 +206,30 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Check Supabase global shared cache first (instant 50ms response)
     const cachedData = await getCachedSuburbFromSupabase(city, currentSuburb);
     if (cachedData) {
+      if (!cachedData.transport) {
+        let geo = cachedData.geo;
+        if (!geo || !geo.bbox) {
+          const geoRes = await fetchSuburbGeoAndVenues(currentSuburb, city);
+          if (geoRes.geo) {
+            geo = geoRes.geo;
+            cachedData.geo = {
+              lat: geo.lat,
+              lng: geo.lng,
+              bbox: geo.bbox,
+              polygon: geo.polygon,
+            };
+          }
+        }
+        if (geo) {
+          const transport = await fetchSuburbTransport(currentSuburb, city, geo as any);
+          if (transport) {
+            cachedData.transport = transport;
+            saveCachedSuburbToSupabase(city, cachedData.name, cachedData).catch((err) =>
+              console.warn("[supabase] legacy cache update failed:", err)
+            );
+          }
+        }
+      }
       return NextResponse.json(cachedData);
     }
 
@@ -213,6 +238,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       fetchSuburbWikiContext(currentSuburb, city),
       fetchSuburbGeoAndVenues(currentSuburb, city),
     ]);
+
+    // Fetch transit data concurrently with LLM generation to avoid extra response latency
+    const transportPromise = geo ? fetchSuburbTransport(currentSuburb, city, geo) : Promise.resolve(null);
 
     const venuesAvailable = venues.length > 0;
     const venueContext = buildVenueContext(venues, currentSuburb, city);
@@ -253,6 +281,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
+    const transport = await transportPromise;
+
     const responsePayload = {
       ...parsed,
       venuesAvailable,
@@ -265,6 +295,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             polygon: geo.polygon,
           }
         : undefined,
+      transport: transport ?? undefined,
     };
 
     // Asynchronously save to Supabase cache for all future users worldwide

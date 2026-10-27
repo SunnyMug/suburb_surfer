@@ -20,12 +20,15 @@ Live at [suburb-surfer.vercel.app](https://suburb-surfer.vercel.app)
 
 ## How it works
 
-When you search for or randomly pick a suburb, the app fetches two things in parallel before calling the LLM:
+When you search for or randomly pick a suburb, the app coordinates multiple parallel data sources:
 
 - **Wikipedia** — the History, Demographics, Heritage listings, Notable residents, and Name/Etymology sections from the suburb's Wikipedia article
-- **OpenStreetMap** — real venue names from Nominatim geocoding + Overpass, scored by data completeness to surface more established places first
+- **OpenStreetMap (Overpass & Nominatim)** — verified dining venues, official suburb polygon boundaries, and public transport infrastructure:
+  - Nearby train stations (`railway=station`), light rail/tram stops (`railway=tram_stop`), ferry wharves (`amenity=ferry_terminal`), and bus stops (`highway=bus_stop`)
+  - Linear track and corridor geometries (`way["railway"]`, `way["busway"]`) for interactive vector map visualisation
+- **Connectivity Snapshot** — synthesises transit connectivity into an intuitive summary (e.g. _"Served by 2 train stations and 4 bus routes"_) with interactive toggles for rail and bus lines on the vector map
 
-Each Wikipedia section is passed to the LLM as a labelled reference block tied to a specific output field — history events come from the History section, heritage sites from Heritage listings, and so on. Restaurant recommendations are restricted to venues confirmed in the OSM data. The LLM can only fall back to its own knowledge when a section is missing, and is instructed to flag uncertainty when it does.
+Each Wikipedia section is passed to the LLM as a labelled reference block tied to a specific output field — history events come from the History section, heritage sites from Heritage listings, and so on. Restaurant recommendations are strictly restricted to venues confirmed in OSM data. The LLM can only fall back to its own knowledge when a section is missing, and is instructed to flag uncertainty when it does.
 
 ---
 

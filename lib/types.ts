@@ -20,6 +20,49 @@ export interface SuburbData {
   image_url?: string;
   rawVenues?: { name: string; category: string; cuisine?: string; lat: number; lng: number }[];
   geo?: SuburbGeo;
+  transport?: TransportSnapshot;
+}
+
+export type TransportType = "train" | "tram" | "ferry" | "bus";
+
+export interface TransportStop {
+  id: string;
+  name: string;
+  type: TransportType;
+  lat: number;
+  lng: number;
+  distanceMetres?: number;
+  isInsideBoundary: boolean;
+  routes?: string[];
+}
+
+export interface TransitLineFeature {
+  type: "Feature";
+  geometry: {
+    type: "LineString" | "MultiLineString";
+    coordinates: number[][] | number[][][];
+  };
+  properties: {
+    id: string;
+    type: "rail" | "light_rail" | "bus";
+    name?: string;
+    ref?: string;
+    colour?: string;
+  };
+}
+
+export interface TransportSnapshot {
+  summary: string;
+  trainCount: number;
+  tramCount: number;
+  ferryCount: number;
+  busCount: number;
+  busRouteCount: number;
+  stops: TransportStop[];
+  lines?: {
+    type: "FeatureCollection";
+    features: TransitLineFeature[];
+  };
 }
 
 export interface SuburbGeo {

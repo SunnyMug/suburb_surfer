@@ -81,7 +81,8 @@ export function MapDisplay({
   >([]);
   const suburbMarkerRef = useRef<Marker | null>(null);
   const dynamicSelectedMarkerRef = useRef<Marker | null>(null);
-  const renderedSuburbRef = useRef<{ name: string; city: string } | null>(null);
+  const transitMarkersRef = useRef<Marker[]>([]);
+  const renderedSuburbRef = useRef<{ name: string; city: string; hasTransport: boolean } | null>(null);
   const onVenueClickRef = useRef(onVenueClick);
   onVenueClickRef.current = onVenueClick;
 
@@ -89,6 +90,10 @@ export function MapDisplay({
   const [currentStyle, setCurrentStyle] = useState<MapStyleKey>("voyager");
   const [styleReloadKey, setStyleReloadKey] = useState(0);
   const [copied, setCopied] = useState(false);
+
+  // Transit layer toggles (focusing purely on rail & stations)
+  const [showRailLines, setShowRailLines] = useState(true);
+  const [showTransitStops, setShowTransitStops] = useState(true);
 
   // Retrieve current city coordinate bounds
   const cityMeta = useMemo(() => {
@@ -144,6 +149,8 @@ export function MapDisplay({
         dynamicSelectedMarkerRef.current.remove();
         dynamicSelectedMarkerRef.current = null;
       }
+      transitMarkersRef.current.forEach((m) => m.remove());
+      transitMarkersRef.current = [];
       map.remove();
       mapRef.current = null;
       setMapLoaded(false);
@@ -191,7 +198,8 @@ export function MapDisplay({
       renderedSuburbRef.current &&
       suburb &&
       renderedSuburbRef.current.name === suburb.name &&
-      renderedSuburbRef.current.city === city;
+      renderedSuburbRef.current.city === city &&
+      renderedSuburbRef.current.hasTransport === Boolean(suburb.transport);
 
     if (isSameSuburb) {
       return;
@@ -201,7 +209,9 @@ export function MapDisplay({
       return;
     }
 
-    renderedSuburbRef.current = suburb ? { name: suburb.name, city } : null;
+    renderedSuburbRef.current = suburb
+      ? { name: suburb.name, city, hasTransport: Boolean(suburb.transport) }
+      : null;
 
     // Clear existing venue markers
     markersRef.current.forEach(({ marker }) => marker.remove());
@@ -222,7 +232,21 @@ export function MapDisplay({
     const fillLayerId = "suburb-boundary-fill";
     const strokeLayerId = "suburb-boundary-stroke";
 
-    // Clean up existing boundary layers if present
+    // Transit line layers
+    const transitSourceId = "transit-lines-source";
+    const railCasingLayerId = "transit-rail-casing";
+    const railLayerId = "transit-rail-line";
+    const lightRailLayerId = "transit-lightrail-line";
+
+    // Clean up existing boundary & transit layers if present
+    if (map.getLayer(lightRailLayerId)) map.removeLayer(lightRailLayerId);
+    if (map.getLayer(railLayerId)) map.removeLayer(railLayerId);
+    if (map.getLayer(railCasingLayerId)) map.removeLayer(railCasingLayerId);
+    if (map.getSource(transitSourceId)) map.removeSource(transitSourceId);
+
+    transitMarkersRef.current.forEach((m) => m.remove());
+    transitMarkersRef.current = [];
+
     if (map.getLayer(fillLayerId)) map.removeLayer(fillLayerId);
     if (map.getLayer(strokeLayerId)) map.removeLayer(strokeLayerId);
     if (map.getSource(sourceId)) map.removeSource(sourceId);
@@ -263,6 +287,72 @@ export function MapDisplay({
         });
       } catch (err) {
         console.warn("[map] failed to add boundary polygon:", err);
+      }
+    }
+
+    // Render transit line geometries if returned by Overpass
+    if (suburb.transport?.lines?.features && suburb.transport.lines.features.length > 0) {
+      try {
+        map.addSource(transitSourceId, {
+          type: "geojson",
+          data: suburb.transport.lines as any,
+        });
+
+        // 1. Heavy Rail outer casing (for track visibility against basemaps)
+        map.addLayer({
+          id: railCasingLayerId,
+          type: "line",
+          source: transitSourceId,
+          filter: ["==", ["get", "type"], "rail"],
+          layout: {
+            visibility: showRailLines ? "visible" : "none",
+            "line-cap": "round",
+            "line-join": "round",
+          },
+          paint: {
+            "line-color": "#ffffff",
+            "line-width": 5,
+            "line-opacity": 0.6,
+          },
+        });
+
+        // 2. Heavy Rail track
+        map.addLayer({
+          id: railLayerId,
+          type: "line",
+          source: transitSourceId,
+          filter: ["==", ["get", "type"], "rail"],
+          layout: {
+            visibility: showRailLines ? "visible" : "none",
+            "line-cap": "round",
+            "line-join": "round",
+          },
+          paint: {
+            "line-color": "#4338ca",
+            "line-width": 3,
+            "line-opacity": 0.9,
+          },
+        });
+
+        // 3. Light Rail / Tram
+        map.addLayer({
+          id: lightRailLayerId,
+          type: "line",
+          source: transitSourceId,
+          filter: ["==", ["get", "type"], "light_rail"],
+          layout: {
+            visibility: showRailLines ? "visible" : "none",
+            "line-cap": "round",
+            "line-join": "round",
+          },
+          paint: {
+            "line-color": "#0891b2",
+            "line-width": 2.5,
+            "line-dasharray": [2, 2],
+          },
+        });
+      } catch (err) {
+        console.warn("[map] failed to add transit line layers:", err);
       }
     }
 
@@ -381,6 +471,53 @@ export function MapDisplay({
       suburbMarkerRef.current = suburbMarker;
     }
 
+    // Transit stop markers (Train, Tram, Ferry)
+    if (suburb.transport?.stops && suburb.transport.stops.length > 0) {
+      suburb.transport.stops.forEach((stop) => {
+        const icon = stop.type === "train" ? "🚆" : stop.type === "tram" ? "🚊" : stop.type === "ferry" ? "⛴️" : "🚌";
+        const bg =
+          stop.type === "train"
+            ? "bg-indigo-600 ring-indigo-300"
+            : stop.type === "tram"
+            ? "bg-cyan-600 ring-cyan-300"
+            : stop.type === "ferry"
+            ? "bg-sky-500 ring-sky-300"
+            : "bg-amber-600 ring-amber-300";
+
+        const el = document.createElement("div");
+        el.className = "transit-stop-marker cursor-pointer select-none group relative";
+        el.style.zIndex = "40";
+        if (!showTransitStops) {
+          el.style.display = "none";
+        }
+        el.innerHTML = `
+          <div class="w-8 h-8 rounded-full ${bg} text-white shadow-xl flex items-center justify-center text-sm border-2 border-white ring-2 transition-transform duration-150 group-hover:scale-125">
+            ${icon}
+          </div>
+        `;
+
+        const distInfo =
+          !stop.isInsideBoundary && stop.distanceMetres
+            ? `<span class="text-[10px] text-slate-500 block mt-0.5">Approx. ${stop.distanceMetres}m from suburb</span>`
+            : `<span class="text-[10px] text-emerald-600 font-semibold block mt-0.5">Within suburb</span>`;
+
+        const popup = new Popup({ offset: 16, closeButton: false }).setHTML(`
+          <div class="p-2 text-center min-w-[130px] select-none">
+            <p class="font-extrabold text-xs text-slate-900">${stop.name}</p>
+            <span class="inline-block text-[10px] uppercase tracking-wider font-bold text-indigo-600 mt-0.5">${stop.type}</span>
+            ${distInfo}
+          </div>
+        `);
+
+        const marker = new Marker({ element: el })
+          .setLngLat([stop.lng, stop.lat])
+          .setPopup(popup)
+          .addTo(map);
+
+        transitMarkersRef.current.push(marker);
+      });
+    }
+
     // Smoothly fly camera to fit suburb boundary or coordinates
     if (suburb.geo?.bbox) {
       const [minLat, maxLat, minLon, maxLon] = suburb.geo.bbox;
@@ -414,6 +551,26 @@ export function MapDisplay({
       });
     }
   }, [suburb, city, mapLoaded, styleReloadKey]);
+
+  // Dynamically react to transit toggles without reloading the entire map
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    if (map.getLayer("transit-rail-casing")) {
+      map.setLayoutProperty("transit-rail-casing", "visibility", showRailLines ? "visible" : "none");
+    }
+    if (map.getLayer("transit-rail-line")) {
+      map.setLayoutProperty("transit-rail-line", "visibility", showRailLines ? "visible" : "none");
+    }
+    if (map.getLayer("transit-lightrail-line")) {
+      map.setLayoutProperty("transit-lightrail-line", "visibility", showRailLines ? "visible" : "none");
+    }
+
+    transitMarkersRef.current.forEach((m) => {
+      m.getElement().style.display = showTransitStops ? "" : "none";
+    });
+  }, [showRailLines, showTransitStops, mapLoaded]);
 
   // 5. Handle selected venue focus, pulsing beacon ring, and popup activation
   useEffect(() => {
@@ -628,6 +785,36 @@ export function MapDisplay({
           );
         })}
       </div>
+
+      {/* Top Right: Transit Overlay Toggles (displayed when suburb has transport data) */}
+      {suburb?.transport && (
+        <div className="absolute top-15 right-4 z-10 flex items-center gap-1 bg-white/90 backdrop-blur-md p-1 rounded-full border border-white/60 shadow-md">
+          <button
+            onClick={() => setShowRailLines((prev) => !prev)}
+            title="Toggle Train & Light Rail Lines"
+            className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all duration-150 flex items-center gap-1 cursor-pointer ${
+              showRailLines
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+            }`}
+          >
+            <span>🚆</span>
+            <span className="hidden sm:inline">Rail Lines</span>
+          </button>
+          <button
+            onClick={() => setShowTransitStops((prev) => !prev)}
+            title="Toggle Stations & Stops (Train, Tram, Ferry)"
+            className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all duration-150 flex items-center gap-1 cursor-pointer ${
+              showTransitStops
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+            }`}
+          >
+            <span>📍</span>
+            <span className="hidden sm:inline">Stations</span>
+          </button>
+        </div>
+      )}
 
       {/* Right Middle: Modern Zoom & Reset Controls */}
       <div className="absolute right-4 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-1 bg-white/90 backdrop-blur-md p-1 rounded-2xl border border-white/60 shadow-lg">
